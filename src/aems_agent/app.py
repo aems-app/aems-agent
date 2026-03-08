@@ -13,9 +13,8 @@ Creates and configures the FastAPI app with:
 import logging
 import logging.handlers
 import os
-from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import AsyncIterator, Awaitable, Callable, Optional
+from typing import Awaitable, Callable, Optional
 
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -25,7 +24,6 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.responses import Response as StarletteResponse
 
 from .config import AGENT_VERSION, API_VERSION, ensure_auth_token, get_config_dir, load_config
-from .license_enforcement import LicenseEnforcementController
 from .routes import router, set_agent_globals
 
 logger = logging.getLogger(__name__)
@@ -79,8 +77,6 @@ def _validate_storage(config_dir: Path) -> None:
 
 def create_app(
     config_dir: Optional[Path] = None,
-    *,
-    skip_startup_license_check: bool = False,
 ) -> FastAPI:
     """
     Create and configure the FastAPI application.
@@ -115,29 +111,11 @@ def create_app(
     # handshake works before the origin is formally added to paired_origins.
     _localhost_origin_re = r"^https?://(?:localhost|127\.0\.0\.1)(?::\d+)?$"
 
-    license_controller = LicenseEnforcementController(
-        config_dir=config_dir,
-        config=config,
-    )
-
-    @asynccontextmanager
-    async def lifespan(app: FastAPI) -> AsyncIterator[None]:
-        app.state.license_controller = license_controller
-        if not skip_startup_license_check:
-            await license_controller.startup_check()
-        await license_controller.start_runtime_monitor()
-        try:
-            yield
-        finally:
-            await license_controller.stop_runtime_monitor()
-
     app = FastAPI(
         title="AEMS Local Bridge Agent",
         description="Local filesystem access for AEMS exam PDFs",
         version=AGENT_VERSION,
-        lifespan=lifespan,
     )
-    app.state.license_controller = license_controller
 
     # Global exception handler for structured JSON errors
     @app.exception_handler(Exception)

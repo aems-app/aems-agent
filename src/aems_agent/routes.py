@@ -33,7 +33,7 @@ from fastapi import APIRouter, Depends, Header, HTTPException, Request, Response
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field, field_validator
 
-from .config import AGENT_VERSION, API_VERSION, MIN_CLIENT_API_VERSION, AgentConfig, load_config, load_license_token, save_config
+from .config import AGENT_VERSION, API_VERSION, MIN_CLIENT_API_VERSION, AgentConfig, load_config, save_config
 from .security import RateLimiter, validate_path_within_storage
 
 logger = logging.getLogger(__name__)
@@ -88,18 +88,6 @@ def _check_rate_limit(request: Request) -> None:
     client_ip = request.client.host if request.client else "unknown"
     if not _rate_limiter.is_allowed(client_ip):
         raise HTTPException(status_code=429, detail="Rate limit exceeded")
-
-
-def _enforce_license_write_capability(request: Request) -> None:
-    """Block write endpoints when soft-block mode is active."""
-    controller = getattr(request.app.state, "license_controller", None)
-    if controller is None:
-        return
-    if not controller.is_write_permitted(method=request.method, path=request.url.path):
-        raise HTTPException(
-            status_code=403,
-            detail="License soft-block active: write operations are disabled",
-        )
 
 
 def _get_storage_path() -> Path:
@@ -219,7 +207,6 @@ async def status() -> Dict[str, Any]:
 
 @router.get("/health")
 async def health(
-    request: Request,
     _token: str = Depends(_verify_token),
     _rl: None = Depends(_check_rate_limit),
 ) -> Dict[str, Any]:
@@ -246,17 +233,6 @@ async def health(
             except OSError:
                 pass
 
-    result["license_jwt"] = load_license_token()
-
-    controller = getattr(request.app.state, "license_controller", None)
-    if controller is not None:
-        snapshot = controller.snapshot()
-        result["license_policy_mode"] = snapshot.policy_mode
-        result["license_limited_mode_active"] = snapshot.limited_mode_active
-        result["license_last_valid"] = snapshot.last_valid
-        result["license_last_reason"] = snapshot.last_reason
-        result["license_last_checked_at_utc"] = snapshot.last_checked_at_utc
-
     return result
 
 
@@ -275,7 +251,6 @@ async def set_path(
     body: SetPathRequest,
     _token: str = Depends(_verify_token),
     _rl: None = Depends(_check_rate_limit),
-    _license: None = Depends(_enforce_license_write_capability),
 ) -> Dict[str, Any]:
     """Set the storage path (validates the directory is writable)."""
     path = Path(body.path)
@@ -367,7 +342,6 @@ async def store_submission(
     x_sha256: Optional[str] = Header(default=None),
     _token: str = Depends(_verify_token),
     _rl: None = Depends(_check_rate_limit),
-    _license: None = Depends(_enforce_license_write_capability),
 ) -> Dict[str, Any]:
     """Store a submission PDF with atomic write."""
     storage_path = _get_storage_path()
@@ -427,7 +401,6 @@ async def delete_submission(
     submission_id: str,
     _token: str = Depends(_verify_token),
     _rl: None = Depends(_check_rate_limit),
-    _license: None = Depends(_enforce_license_write_capability),
 ) -> Dict[str, Any]:
     """Delete a submission directory and all its files."""
     storage_path = _get_storage_path()
@@ -480,7 +453,6 @@ async def store_annotated(
     x_sha256: Optional[str] = Header(default=None),
     _token: str = Depends(_verify_token),
     _rl: None = Depends(_check_rate_limit),
-    _license: None = Depends(_enforce_license_write_capability),
 ) -> Dict[str, Any]:
     """Store an annotated submission PDF with atomic write."""
     storage_path = _get_storage_path()

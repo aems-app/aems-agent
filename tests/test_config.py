@@ -10,9 +10,7 @@ from aems_agent.config import (
     ensure_auth_token,
     get_auth_token,
     get_config_dir,
-    load_license_token,
     load_config,
-    save_license_token,
     save_config,
 )
 
@@ -90,8 +88,6 @@ class TestAgentConfig:
         assert config.port == 61234
         assert config.host == "127.0.0.1"
         assert len(config.allowed_origins) > 0
-        assert config.license_enforcement_mode == "warn"
-        assert config.license_check_interval_seconds == 3600
 
     def test_custom_values(self) -> None:
         config = AgentConfig(
@@ -111,14 +107,6 @@ class TestAgentConfig:
             AgentConfig(port=80)
         with pytest.raises(ValueError):
             AgentConfig(port=99999)
-
-    def test_license_enforcement_mode_validation(self) -> None:
-        AgentConfig(license_enforcement_mode="warn")
-        AgentConfig(license_enforcement_mode="soft-block")
-        AgentConfig(license_enforcement_mode="hard-block")
-        with pytest.raises(ValueError, match="license_enforcement_mode"):
-            AgentConfig(license_enforcement_mode="deny-all")
-
 
 class TestLoadSaveConfig:
     """Tests for load_config/save_config."""
@@ -188,16 +176,3 @@ class TestAuthToken:
         assert get_auth_token(config_dir) == token
 
 
-class TestLicenseToken:
-    """Tests for license token file helpers."""
-
-    def test_save_and_load_license_token(self, tmp_path: Path) -> None:
-        config_dir = tmp_path / "cfg"
-        config_dir.mkdir()
-        save_license_token("jwt-token", config_dir)
-        assert load_license_token(config_dir) == "jwt-token"
-
-    def test_load_license_token_missing(self, tmp_path: Path) -> None:
-        config_dir = tmp_path / "cfg"
-        config_dir.mkdir()
-        assert load_license_token(config_dir) is None

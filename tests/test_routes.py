@@ -70,15 +70,6 @@ class TestHealthEndpoint:
         data = resp.json()
         assert "disk_total_bytes" in data
         assert "disk_free_bytes" in data
-        assert "license_policy_mode" in data
-        assert "license_limited_mode_active" in data
-
-    def test_status_does_not_leak_license_info(self, agent_client: Any) -> None:
-        _skip_if_no_fastapi()
-        resp = agent_client.get("/status")
-        data = resp.json()
-        assert "license_policy_mode" not in data
-        assert "license_last_reason" not in data
 
 
 class TestConfigPathEndpoints:
@@ -123,20 +114,6 @@ class TestConfigPathEndpoints:
             headers=auth_headers,
         )
         assert resp.status_code == 422  # Pydantic validation error
-
-    def test_set_path_blocked_in_soft_block(
-        self, agent_client: Any, auth_headers: dict, tmp_path: Path
-    ) -> None:
-        _skip_if_no_fastapi()
-        agent_client.app.state.license_controller._force_limited_mode(True)
-        new_path = tmp_path / "blocked_storage"
-        resp = agent_client.put(
-            "/config/path",
-            json={"path": str(new_path)},
-            headers=auth_headers,
-        )
-        assert resp.status_code == 403
-
 
 class TestFileOperations:
     """Tests for file store/retrieve/delete endpoints."""
@@ -194,21 +171,6 @@ class TestFileOperations:
         )
         assert resp.status_code == 400
         assert "PDF" in resp.json()["detail"]
-
-    def test_store_blocked_in_soft_block(
-        self,
-        agent_client: Any,
-        auth_headers: dict,
-        sample_pdf: bytes,
-    ) -> None:
-        _skip_if_no_fastapi()
-        agent_client.app.state.license_controller._force_limited_mode(True)
-        resp = agent_client.put(
-            "/files/123/456",
-            content=sample_pdf,
-            headers={**auth_headers, "Content-Type": "application/pdf"},
-        )
-        assert resp.status_code == 403
 
     def test_get_nonexistent_returns_404(self, agent_client: Any, auth_headers: dict) -> None:
         _skip_if_no_fastapi()
@@ -610,49 +572,6 @@ class TestSha256Validation:
         assert resp.status_code == 400
 
 
-class TestLicenseEnforcementRoutes:
-    """Tests for license enforcement on write endpoints."""
-
-    def test_delete_blocked_in_soft_block(
-        self,
-        agent_client: Any,
-        auth_headers: dict,
-        sample_pdf: bytes,
-    ) -> None:
-        _skip_if_no_fastapi()
-        # Store first so there's something to delete
-        agent_client.put(
-            "/files/123/456",
-            content=sample_pdf,
-            headers={**auth_headers, "Content-Type": "application/pdf"},
-        )
-        agent_client.app.state.license_controller._force_limited_mode(True)
-        resp = agent_client.delete("/files/123/456", headers=auth_headers)
-        assert resp.status_code == 403
-
-    def test_store_annotated_blocked_in_soft_block(
-        self,
-        agent_client: Any,
-        auth_headers: dict,
-        sample_pdf: bytes,
-    ) -> None:
-        _skip_if_no_fastapi()
-        agent_client.app.state.license_controller._force_limited_mode(True)
-        resp = agent_client.put(
-            "/files/123/456/annotated",
-            content=sample_pdf,
-            headers={**auth_headers, "Content-Type": "application/pdf"},
-        )
-        assert resp.status_code == 403
-
-    def test_get_allowed_in_soft_block(
-        self, agent_client: Any, auth_headers: dict
-    ) -> None:
-        _skip_if_no_fastapi()
-        agent_client.app.state.license_controller._force_limited_mode(True)
-        resp = agent_client.get("/files/123", headers=auth_headers)
-        assert resp.status_code == 200
-
 
 # ---------------------------------------------------------------------------
 # C1 PIN Pairing Tests (Phase 2)
@@ -994,53 +913,6 @@ class TestUploadSizeLimit:
 # ---------------------------------------------------------------------------
 
 
-class TestHealthLicenseJwt:
-    """Tests for license_jwt field in /health response."""
-
-    def test_health_includes_license_jwt(
-        self,
-        agent_client: Any,
-        auth_headers: dict,
-        agent_config_dir: Path,
-        monkeypatch: pytest.MonkeyPatch,
-    ) -> None:
-        _skip_if_no_fastapi()
-        # Write a fake license.jwt into the config dir
-        license_file = agent_config_dir / "license.jwt"
-        license_file.write_text("fake.jwt.token", encoding="utf-8")
-
-        from aems_agent import config as config_mod
-
-        monkeypatch.setattr(config_mod, "get_config_dir", lambda: agent_config_dir)
-
-        resp = agent_client.get("/health", headers=auth_headers)
-        assert resp.status_code == 200
-        data = resp.json()
-        assert data["license_jwt"] == "fake.jwt.token"
-
-    def test_health_license_jwt_null_when_missing(
-        self,
-        agent_client: Any,
-        auth_headers: dict,
-        agent_config_dir: Path,
-        monkeypatch: pytest.MonkeyPatch,
-    ) -> None:
-        _skip_if_no_fastapi()
-        # Ensure no license.jwt exists
-        license_file = agent_config_dir / "license.jwt"
-        if license_file.exists():
-            license_file.unlink()
-
-        from aems_agent import config as config_mod
-
-        monkeypatch.setattr(config_mod, "get_config_dir", lambda: agent_config_dir)
-
-        resp = agent_client.get("/health", headers=auth_headers)
-        assert resp.status_code == 200
-        data = resp.json()
-        assert data["license_jwt"] is None
-
-
 class TestStatusExactFields:
     """Tests for exact field set in /status response."""
 
@@ -1079,8 +951,8 @@ class TestCreateAppLogHandlers:
             if isinstance(h, logging.handlers.RotatingFileHandler)
         ])
 
-        create_app(config_dir, skip_startup_license_check=True)
-        create_app(config_dir, skip_startup_license_check=True)
+        create_app(config_dir)
+        create_app(config_dir)
 
         rotating_count = len([
             h for h in agent_logger.handlers

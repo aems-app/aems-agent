@@ -28,8 +28,6 @@ try:
     AGENT_VERSION = _pkg_version("aems-agent")
 except Exception:
     AGENT_VERSION = "0.0.0-dev"
-VALID_LICENSE_ENFORCEMENT_MODES = {"warn", "soft-block", "hard-block"}
-
 API_VERSION = "1.0.0"
 MIN_CLIENT_API_VERSION = "1.0.0"
 
@@ -87,29 +85,6 @@ class AgentConfig(BaseModel):
         default_factory=list,
         description="Origins that have completed pairing (auto-populated)",
     )
-    license_service_url: str = Field(
-        default="",
-        description="Base URL of license service used for heartbeat validation",
-    )
-    license_issuer: str = Field(
-        default="",
-        description="Expected JWT issuer for license validation",
-    )
-    license_audience: str = Field(
-        default="aems-agent",
-        description="Expected JWT audience for license validation",
-    )
-    license_enforcement_mode: str = Field(
-        default="warn",
-        description="Runtime policy when license is invalid: warn, soft-block, hard-block",
-    )
-    license_check_interval_seconds: int = Field(
-        default=3600,
-        ge=60,
-        le=86400,
-        description="Periodic runtime license re-check interval in seconds",
-    )
-
     @field_validator("storage_path")
     @classmethod
     def validate_storage_path(cls, v: Optional[str]) -> Optional[str]:
@@ -119,15 +94,6 @@ class AgentConfig(BaseModel):
             if not path.is_absolute():
                 raise ValueError(f"Storage path must be absolute: {v}")
         return v
-
-    @field_validator("license_enforcement_mode")
-    @classmethod
-    def validate_license_enforcement_mode(cls, v: str) -> str:
-        mode = v.strip().lower()
-        if mode not in VALID_LICENSE_ENFORCEMENT_MODES:
-            allowed = ", ".join(sorted(VALID_LICENSE_ENFORCEMENT_MODES))
-            raise ValueError(f"license_enforcement_mode must be one of: {allowed}")
-        return mode
 
 
 def load_config(config_dir: Optional[Path] = None) -> AgentConfig:
@@ -231,28 +197,3 @@ def get_auth_token(config_dir: Optional[Path] = None) -> Optional[str]:
     return None
 
 
-def save_license_token(token: str, config_dir: Optional[Path] = None) -> Path:
-    """Persist the license JWT to disk and return the token file path."""
-    if config_dir is None:
-        config_dir = get_config_dir()
-
-    config_dir.mkdir(parents=True, exist_ok=True)
-    token_file = config_dir / "license.jwt"
-    token_file.write_text(token.strip(), encoding="utf-8")
-    try:
-        token_file.chmod(0o600)
-    except OSError:
-        pass
-    return token_file
-
-
-def load_license_token(config_dir: Optional[Path] = None) -> Optional[str]:
-    """Read the stored license JWT, returning None if it is missing."""
-    if config_dir is None:
-        config_dir = get_config_dir()
-
-    token_file = config_dir / "license.jwt"
-    if not token_file.exists():
-        return None
-    token = token_file.read_text(encoding="utf-8").strip()
-    return token or None
