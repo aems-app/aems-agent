@@ -574,7 +574,7 @@ async def pair_initiate(
     return {
         "challenge_id": challenge_id,
         "agent_name": f"AEMS Agent ({config.host}:{config.port})",
-        "storage_path": config.storage_path,
+        "storage_configured": config.storage_path is not None,
         "expires_in": 120,
         "requires_pin": True,
     }
