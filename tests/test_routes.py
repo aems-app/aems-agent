@@ -1110,3 +1110,140 @@ class TestCreateAppLogHandlers:
         ])
         # At most one new RotatingFileHandler should exist
         assert rotating_count <= initial_count + 1
+
+
+# ---------------------------------------------------------------------------
+# Canvas Download Route Tests
+# ---------------------------------------------------------------------------
+
+
+class TestCanvasDownloadRoutes:
+    """Tests for POST /canvas/download-submissions and GET /canvas/download-jobs/{job_id}."""
+
+    def test_canvas_download_rejects_invalid_payload(
+        self, agent_client: Any, auth_headers: dict
+    ) -> None:
+        _skip_if_no_fastapi()
+        resp = agent_client.post(
+            "/canvas/download-submissions",
+            json={"encrypted_payload": "not-valid-base64!!!"},
+            headers=auth_headers,
+        )
+        assert resp.status_code == 400
+        assert "decrypt" in resp.json()["detail"].lower()
+
+    def test_canvas_download_job_not_found(
+        self, agent_client: Any, auth_headers: dict
+    ) -> None:
+        _skip_if_no_fastapi()
+        resp = agent_client.get("/canvas/download-jobs/missing-job", headers=auth_headers)
+        assert resp.status_code == 404
+
+    def test_canvas_download_requires_auth(self, agent_client: Any) -> None:
+        _skip_if_no_fastapi()
+        resp = agent_client.post(
+            "/canvas/download-submissions",
+            json={"encrypted_payload": "dGVzdA=="},
+        )
+        assert resp.status_code == 401
+
+    def test_canvas_download_job_status_requires_auth(self, agent_client: Any) -> None:
+        _skip_if_no_fastapi()
+        resp = agent_client.get("/canvas/download-jobs/some-job")
+        assert resp.status_code == 401
+
+    def test_canvas_download_missing_payload_field(
+        self, agent_client: Any, auth_headers: dict
+    ) -> None:
+        _skip_if_no_fastapi()
+        resp = agent_client.post(
+            "/canvas/download-submissions",
+            json={},
+            headers=auth_headers,
+        )
+        assert resp.status_code == 422  # Pydantic validation error
+
+    def test_canvas_download_accepts_encrypted_manifest(
+        self, agent_client: Any, auth_headers: dict, agent_config_dir: Path
+    ) -> None:
+        """POST with properly encrypted manifest returns job_id."""
+        _skip_if_no_fastapi()
+        import base64
+        import json as json_mod
+
+        from nacl.public import PublicKey, SealedBox
+
+        from aems_agent.crypto import get_key_id, load_public_key
+
+        # Build manifest with the agent's real key ID
+        agent_key_id = get_key_id(agent_config_dir)
+        manifest = {
+            "canvas_base_url": "https://university.instructure.com",
+            "canvas_token": "test_token",
+            "assignment_id": 100,
+            "manifest_version": 1,
+            "expires_at": time.time() + 300,
+            "nonce": "test-nonce",
+            "audience_key_id": agent_key_id,
+            "submissions": [
+                {"submission_id": 1001, "file_id": 569, "download_url": "/files/569/download"}
+            ],
+        }
+
+        # Encrypt with agent's public key
+        pub_bytes = load_public_key(agent_config_dir)
+        pub_key = PublicKey(pub_bytes)
+        box = SealedBox(pub_key)
+        ciphertext = box.encrypt(json_mod.dumps(manifest).encode())
+        payload_b64 = base64.b64encode(ciphertext).decode()
+
+        resp = agent_client.post(
+            "/canvas/download-submissions",
+            json={"encrypted_payload": payload_b64},
+            headers=auth_headers,
+        )
+        assert resp.status_code == 200
+        data = resp.json()
+        assert "job_id" in data
+        assert data["status"] == "pending"
+        assert data["total_submissions"] == 1
+
+    def test_canvas_download_rejects_expired_manifest(
+        self, agent_client: Any, auth_headers: dict, agent_config_dir: Path
+    ) -> None:
+        """POST with expired manifest returns 403."""
+        _skip_if_no_fastapi()
+        import base64
+        import json as json_mod
+
+        from nacl.public import PublicKey, SealedBox
+
+        from aems_agent.crypto import get_key_id, load_public_key
+
+        agent_key_id = get_key_id(agent_config_dir)
+        manifest = {
+            "canvas_base_url": "https://university.instructure.com",
+            "canvas_token": "test_token",
+            "assignment_id": 100,
+            "manifest_version": 1,
+            "expires_at": time.time() - 10,  # expired
+            "nonce": "test-nonce",
+            "audience_key_id": agent_key_id,
+            "submissions": [
+                {"submission_id": 1001, "file_id": 569, "download_url": "/files/569/download"}
+            ],
+        }
+
+        pub_bytes = load_public_key(agent_config_dir)
+        pub_key = PublicKey(pub_bytes)
+        box = SealedBox(pub_key)
+        ciphertext = box.encrypt(json_mod.dumps(manifest).encode())
+        payload_b64 = base64.b64encode(ciphertext).decode()
+
+        resp = agent_client.post(
+            "/canvas/download-submissions",
+            json={"encrypted_payload": payload_b64},
+            headers=auth_headers,
+        )
+        assert resp.status_code == 403
+        assert "expired" in resp.json()["detail"].lower()

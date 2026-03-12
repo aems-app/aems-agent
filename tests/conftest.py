@@ -9,16 +9,19 @@ from aems_agent.config import AgentConfig, save_config, ensure_auth_token
 
 @pytest.fixture(autouse=True)
 def _reset_route_state() -> Generator:
-    """Reset module-level pairing state and rate limiters between tests."""
+    """Reset module-level pairing state, rate limiters, and download jobs between tests."""
     from aems_agent import routes
+    from aems_agent.canvas_download import _download_jobs
 
     routes._pairing_challenge = None
     routes._rate_limiter.reset()
     routes._pairing_rate_limiter.reset()
+    _download_jobs.clear()
     yield
     routes._pairing_challenge = None
     routes._rate_limiter.reset()
     routes._pairing_rate_limiter.reset()
+    _download_jobs.clear()
 
 
 @pytest.fixture

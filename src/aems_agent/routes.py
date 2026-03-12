@@ -18,6 +18,8 @@ Endpoint summary:
     GET  /data/{aid}/results/                           - List result files (auth)
     PUT  /data/{aid}/assignment.json                    - Store assignment JSON (auth)
     GET  /data/{aid}/assignment.json                    - Get assignment JSON (auth)
+    POST /canvas/download-submissions                   - Start download job (auth, encrypted)
+    GET  /canvas/download-jobs/{job_id}                 - Poll download progress (auth)
 """
 
 import asyncio
@@ -645,6 +647,109 @@ async def get_assignment_json(
     if not target.exists():
         raise HTTPException(status_code=404, detail="Assignment metadata not found")
     return json.loads(target.read_bytes())
+
+
+# ---------------------------------------------------------------------------
+# Canvas Download Endpoints
+# ---------------------------------------------------------------------------
+
+
+class EncryptedPayload(BaseModel):
+    """Request body for encrypted manifest submission."""
+
+    encrypted_payload: str = Field(..., description="Base64-encoded NaCl SealedBox ciphertext")
+
+
+@router.post("/canvas/download-submissions")
+async def canvas_download_submissions(
+    body: EncryptedPayload,
+    _token: str = Depends(_verify_token),
+    _rl: None = Depends(_check_rate_limit),
+) -> Dict[str, Any]:
+    """Decrypt manifest, create a download job, and return job metadata.
+
+    The encrypted payload contains a JSON manifest with Canvas download URLs.
+    The agent decrypts it using its private key, validates the manifest, and
+    starts a background download task. Returns 202-style response with job_id.
+    """
+    import base64
+
+    from .canvas_download import (
+        ManifestValidationError,
+        create_download_job,
+        run_download_job,
+        validate_manifest,
+    )
+    from .crypto import decrypt_sealed_box, get_key_id
+
+    config = _get_config()
+    if _config_dir is None:
+        raise HTTPException(status_code=500, detail="Agent config not initialized")
+
+    # Decrypt
+    try:
+        ciphertext = base64.b64decode(body.encrypted_payload)
+        plaintext = decrypt_sealed_box(_config_dir, ciphertext)
+        manifest = json.loads(plaintext)
+    except Exception:
+        raise HTTPException(status_code=400, detail="Failed to decrypt manifest")
+
+    # Build allowed hosts from config origins + *.instructure.com wildcard
+    allowed_hosts: list[str] = []
+    for origin in config.allowed_origins + config.paired_origins:
+        h = urlparse(origin).hostname
+        if h:
+            allowed_hosts.append(h)
+
+    agent_key_id = get_key_id(_config_dir)
+
+    try:
+        validate_manifest(manifest, allowed_hosts=allowed_hosts, agent_key_id=agent_key_id)
+    except ManifestValidationError as e:
+        raise HTTPException(status_code=403, detail=str(e))
+
+    # Create job and start background download
+    if not config.storage_path:
+        raise HTTPException(status_code=503, detail="Storage path not configured")
+
+    job_id = create_download_job(manifest)
+    asyncio.create_task(
+        run_download_job(
+            job_id=job_id,
+            manifest=manifest,
+            storage_path=Path(config.storage_path),
+        )
+    )
+
+    return {
+        "job_id": job_id,
+        "status": "pending",
+        "total_submissions": len(manifest["submissions"]),
+    }
+
+
+@router.get("/canvas/download-jobs/{job_id}")
+async def get_canvas_download_job(
+    job_id: str,
+    _token: str = Depends(_verify_token),
+    _rl: None = Depends(_check_rate_limit),
+) -> Dict[str, Any]:
+    """Return current download job status and per-submission progress."""
+    from .canvas_download import get_download_job
+
+    job = get_download_job(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="Unknown download job")
+
+    return {
+        "job_id": job_id,
+        "status": job.status,
+        "downloaded": job.downloaded,
+        "skipped": job.skipped,
+        "failed": job.failed,
+        "total_submissions": job.total_submissions,
+        "per_submission": job.per_submission,
+    }
 
 
 # ---------------------------------------------------------------------------
