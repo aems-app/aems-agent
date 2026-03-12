@@ -19,6 +19,11 @@ Endpoint summary:
     PUT  /data/{aid}/assignment.json                    - Store assignment JSON (auth)
     GET  /data/{aid}/assignment.json                    - Get assignment JSON (auth)
     POST /annotate/{assignment_id}/{submission_id}       - Generate annotated PDF (auth)
+    GET  /annotations/{aid}/{sid}                       - List annotations (auth)
+    GET  /annotations/{aid}/{sid}/version               - Annotation version token (auth)
+    POST /annotations/{aid}/{sid}                       - Add annotation (auth)
+    PUT  /annotations/{aid}/{sid}/{annot_id}            - Update annotation (auth)
+    DELETE /annotations/{aid}/{sid}/{annot_id}           - Delete annotation (auth)
     POST /canvas/download-submissions                   - Start download job (auth, encrypted)
     GET  /canvas/download-jobs/{job_id}                 - Poll download progress (auth)
 """
@@ -44,6 +49,7 @@ from fastapi import APIRouter, Depends, Header, HTTPException, Request, Response
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field, field_validator
 
+from . import annotation_crud
 from .config import AGENT_VERSION, API_VERSION, MIN_CLIENT_API_VERSION, AgentConfig, load_config, save_config
 from .security import RateLimiter, validate_path_within_storage
 
@@ -236,7 +242,7 @@ async def get_capabilities() -> Dict[str, Any]:
     return {
         "agent_version": AGENT_VERSION,
         "supported_contract_versions": supported_versions,
-        "features": ["file_storage", "canvas_download", "local_annotation"],
+        "features": ["file_storage", "canvas_download", "local_annotation", "annotation_crud"],
         "supported_annotation_contract_versions": supported_versions,
         "encryption_key_id": get_key_id(_config_dir),
         "public_key_base64": base64.b64encode(
@@ -715,6 +721,128 @@ async def annotate_submission(
     except Exception:
         logger.exception("Annotation generation failed")
         raise HTTPException(status_code=500, detail="Annotation generation failed")
+
+
+# ---------------------------------------------------------------------------
+# Annotation CRUD Endpoints
+# ---------------------------------------------------------------------------
+
+
+def _require_annotation_contract_version(request: Request) -> None:
+    """Require ``X-AEMS-Annotation-Contract-Version: 1`` on annotation CRUD requests."""
+    value = request.headers.get("X-AEMS-Annotation-Contract-Version")
+    if value != "1":
+        raise HTTPException(status_code=409, detail="Unsupported annotation contract version")
+
+
+@router.get("/annotations/{aid}/{sid}")
+async def list_annotations(
+    aid: str,
+    sid: str,
+    request: Request,
+    _token: str = Depends(_verify_token),
+    _rl: None = Depends(_check_rate_limit),
+) -> Dict[str, Any]:
+    """List all annotations in the annotated PDF."""
+    _require_annotation_contract_version(request)
+    storage_path = _get_storage_path()
+    aid = _validate_path_segment(aid, "assignment_id")
+    sid = _validate_path_segment(sid, "submission_id")
+    pdf_path = _annotated_pdf_path(storage_path, aid, sid)
+    if not pdf_path.exists():
+        raise HTTPException(status_code=404, detail="Annotated PDF not found")
+    return annotation_crud.list_annotations(pdf_path)
+
+
+@router.get("/annotations/{aid}/{sid}/version")
+async def get_annotation_version(
+    aid: str,
+    sid: str,
+    request: Request,
+    _token: str = Depends(_verify_token),
+    _rl: None = Depends(_check_rate_limit),
+) -> Dict[str, Any]:
+    """Return a version token for the annotated PDF."""
+    _require_annotation_contract_version(request)
+    storage_path = _get_storage_path()
+    aid = _validate_path_segment(aid, "assignment_id")
+    sid = _validate_path_segment(sid, "submission_id")
+    pdf_path = _annotated_pdf_path(storage_path, aid, sid)
+    if not pdf_path.exists():
+        raise HTTPException(status_code=404, detail="Annotated PDF not found")
+    return annotation_crud.get_version(pdf_path)
+
+
+@router.post("/annotations/{aid}/{sid}", status_code=201)
+async def create_annotation(
+    aid: str,
+    sid: str,
+    request: Request,
+    _token: str = Depends(_verify_token),
+    _rl: None = Depends(_check_rate_limit),
+) -> Dict[str, Any]:
+    """Add a new annotation to the annotated PDF."""
+    _require_annotation_contract_version(request)
+    storage_path = _get_storage_path()
+    aid = _validate_path_segment(aid, "assignment_id")
+    sid = _validate_path_segment(sid, "submission_id")
+    pdf_path = _annotated_pdf_path(storage_path, aid, sid)
+    if not pdf_path.exists():
+        raise HTTPException(status_code=404, detail="Annotated PDF not found")
+    payload = await _read_json_body(request)
+    try:
+        return annotation_crud.add_annotation(pdf_path, payload)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
+@router.put("/annotations/{aid}/{sid}/{annot_id:path}")
+async def update_annotation_route(
+    aid: str,
+    sid: str,
+    annot_id: str,
+    request: Request,
+    _token: str = Depends(_verify_token),
+    _rl: None = Depends(_check_rate_limit),
+) -> Dict[str, Any]:
+    """Update an existing annotation in the annotated PDF."""
+    _require_annotation_contract_version(request)
+    storage_path = _get_storage_path()
+    aid = _validate_path_segment(aid, "assignment_id")
+    sid = _validate_path_segment(sid, "submission_id")
+    pdf_path = _annotated_pdf_path(storage_path, aid, sid)
+    if not pdf_path.exists():
+        raise HTTPException(status_code=404, detail="Annotated PDF not found")
+    payload = await _read_json_body(request)
+    try:
+        return annotation_crud.update_annotation(pdf_path, annot_id, payload)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail="Annotation not found")
+
+
+@router.delete("/annotations/{aid}/{sid}/{annot_id:path}")
+async def delete_annotation_route(
+    aid: str,
+    sid: str,
+    annot_id: str,
+    request: Request,
+    _token: str = Depends(_verify_token),
+    _rl: None = Depends(_check_rate_limit),
+) -> Dict[str, Any]:
+    """Delete an annotation from the annotated PDF."""
+    _require_annotation_contract_version(request)
+    storage_path = _get_storage_path()
+    aid = _validate_path_segment(aid, "assignment_id")
+    sid = _validate_path_segment(sid, "submission_id")
+    pdf_path = _annotated_pdf_path(storage_path, aid, sid)
+    if not pdf_path.exists():
+        raise HTTPException(status_code=404, detail="Annotated PDF not found")
+    try:
+        return annotation_crud.delete_annotation(pdf_path, annot_id)
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail="Annotation not found")
 
 
 # ---------------------------------------------------------------------------

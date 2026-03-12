@@ -4,7 +4,7 @@ import hashlib
 import importlib.util
 import time
 from pathlib import Path
-from typing import Any
+from typing import Any, Dict, List
 
 import pytest
 
@@ -1343,3 +1343,348 @@ class TestCanvasDownloadRoutes:
         )
         assert resp.status_code == 403
         assert "manifest validation failed" in resp.json()["detail"].lower()
+
+
+# ---------------------------------------------------------------------------
+# Annotation CRUD Route Tests
+# ---------------------------------------------------------------------------
+
+
+def _create_annotated_pdf(tmp_storage_path: Path, aid: str, sid: str) -> Path:
+    """Create a submission dir with submission.pdf + submission_annotated.pdf containing annotations."""
+    from aems_pdf_annotator._fitz import fitz
+    from aems_pdf_annotator import (
+        PDFAnnotator,
+        PDFAnnotation,
+        BBox,
+        AnnotationType,
+        AnnotationColor,
+        AnnotationSource,
+    )
+
+    sub_dir = tmp_storage_path / aid / sid
+    sub_dir.mkdir(parents=True, exist_ok=True)
+
+    # Create base submission PDF
+    base_path = sub_dir / "submission.pdf"
+    doc = fitz.open()
+    doc.new_page(width=612, height=792)
+    doc.new_page(width=612, height=792)
+    doc.save(str(base_path))
+    doc.close()
+
+    # Create annotated PDF with annotations
+    ann_path = sub_dir / "submission_annotated.pdf"
+    doc = fitz.open()
+    doc.new_page(width=612, height=792)
+    doc.new_page(width=612, height=792)
+    doc.save(str(ann_path))
+    doc.close()
+
+    annotations = [
+        PDFAnnotation(
+            page_index=0,
+            bbox=BBox(x0=50, y0=700, x1=200, y1=750),
+            kind=AnnotationType.TEXT,
+            color=AnnotationColor.GREEN,
+            comment="Correct approach",
+            source=AnnotationSource.AI,
+            grader_name="AI Grader",
+            is_verdict=False,
+        ),
+        PDFAnnotation(
+            page_index=0,
+            bbox=BBox(x0=50, y0=500, x1=200, y1=550),
+            kind=AnnotationType.TEXT,
+            color=AnnotationColor.RED,
+            comment="Sign error in step 3",
+            source=AnnotationSource.AI,
+            grader_name="AI Grader",
+            is_verdict=False,
+        ),
+        PDFAnnotation(
+            page_index=1,
+            bbox=BBox(x0=50, y0=600, x1=300, y1=650),
+            kind=AnnotationType.TEXT,
+            color=AnnotationColor.AMBER,
+            comment="Task 2: 5/10",
+            source=AnnotationSource.AI,
+            grader_name="AI Grader",
+            is_verdict=True,
+        ),
+    ]
+
+    with PDFAnnotator(ann_path) as annotator:
+        for ann in annotations:
+            annotator.add_annotation(ann)
+        annotator.save()
+
+    return ann_path
+
+
+def _annotation_headers(auth_headers: dict) -> dict:
+    """Return auth headers merged with the required annotation contract version header."""
+    return {**auth_headers, "X-AEMS-Annotation-Contract-Version": "1"}
+
+
+class TestAnnotationCrudEndpoints:
+    """Route-level tests for annotation CRUD endpoints."""
+
+    def test_list_annotations(
+        self, agent_client: Any, auth_headers: dict, tmp_storage_path: Path
+    ) -> None:
+        """GET /annotations/{aid}/{sid} returns grouped annotations."""
+        _skip_if_no_fastapi()
+        _create_annotated_pdf(tmp_storage_path, "a1", "s1")
+        headers = _annotation_headers(auth_headers)
+        resp = agent_client.get("/annotations/a1/s1", headers=headers)
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["success"] is True
+        annotations = data["annotations"]
+        # Page 0 has 2, page 1 has 1
+        assert len(annotations["0"]) == 2
+        assert len(annotations["1"]) == 1
+
+    def test_list_annotations_404_when_no_annotated_pdf(
+        self, agent_client: Any, auth_headers: dict
+    ) -> None:
+        """GET /annotations/{aid}/{sid} returns 404 when annotated PDF missing."""
+        _skip_if_no_fastapi()
+        headers = _annotation_headers(auth_headers)
+        resp = agent_client.get("/annotations/nonexist/none", headers=headers)
+        assert resp.status_code == 404
+
+    def test_get_version(
+        self, agent_client: Any, auth_headers: dict, tmp_storage_path: Path
+    ) -> None:
+        """GET /annotations/{aid}/{sid}/version returns a version token."""
+        _skip_if_no_fastapi()
+        _create_annotated_pdf(tmp_storage_path, "a1", "s1")
+        headers = _annotation_headers(auth_headers)
+        resp = agent_client.get("/annotations/a1/s1/version", headers=headers)
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["success"] is True
+        assert "version" in data
+        # Version token has format "mtime_ns:size"
+        assert ":" in data["version"]
+
+    def test_create_annotation(
+        self, agent_client: Any, auth_headers: dict, tmp_storage_path: Path
+    ) -> None:
+        """POST /annotations/{aid}/{sid} creates a new annotation."""
+        _skip_if_no_fastapi()
+        _create_annotated_pdf(tmp_storage_path, "a1", "s1")
+        headers = _annotation_headers(auth_headers)
+
+        payload = {
+            "page_index": 0,
+            "content": "New teacher comment",
+            "kind": "text",
+            "color": "amber",
+            "rect": [100, 100, 250, 150],
+        }
+        resp = agent_client.post(
+            "/annotations/a1/s1",
+            json=payload,
+            headers=headers,
+        )
+        assert resp.status_code == 201
+        data = resp.json()
+        assert data["success"] is True
+        assert "annotation" in data
+        assert data["annotation"]["content"] == "New teacher comment"
+
+    def test_create_annotation_returns_201(
+        self, agent_client: Any, auth_headers: dict, tmp_storage_path: Path
+    ) -> None:
+        """POST /annotations returns HTTP 201 Created."""
+        _skip_if_no_fastapi()
+        _create_annotated_pdf(tmp_storage_path, "a1", "s1")
+        headers = _annotation_headers(auth_headers)
+
+        resp = agent_client.post(
+            "/annotations/a1/s1",
+            json={"page_index": 0, "content": "Test", "kind": "text", "color": "green"},
+            headers=headers,
+        )
+        assert resp.status_code == 201
+
+    def test_update_annotation_content(
+        self, agent_client: Any, auth_headers: dict, tmp_storage_path: Path
+    ) -> None:
+        """PUT /annotations/{aid}/{sid}/{annot_id} updates content."""
+        _skip_if_no_fastapi()
+        _create_annotated_pdf(tmp_storage_path, "a1", "s1")
+        headers = _annotation_headers(auth_headers)
+
+        # List annotations to find a valid ID
+        list_resp = agent_client.get("/annotations/a1/s1", headers=headers)
+        annotations = list_resp.json()["annotations"]
+        first_ann = annotations["0"][0]
+        ann_id = first_ann["id"]
+
+        # Update content
+        resp = agent_client.put(
+            f"/annotations/a1/s1/{ann_id}",
+            json={"content": "Updated comment"},
+            headers=headers,
+        )
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["success"] is True
+
+    def test_update_annotation_cross_page_move(
+        self, agent_client: Any, auth_headers: dict, tmp_storage_path: Path
+    ) -> None:
+        """PUT with page_index moves annotation to a different page."""
+        _skip_if_no_fastapi()
+        _create_annotated_pdf(tmp_storage_path, "a1", "s1")
+        headers = _annotation_headers(auth_headers)
+
+        # Get annotation on page 0
+        list_resp = agent_client.get("/annotations/a1/s1", headers=headers)
+        annotations = list_resp.json()["annotations"]
+        first_ann = annotations["0"][0]
+        ann_id = first_ann["id"]
+
+        # Move to page 1
+        resp = agent_client.put(
+            f"/annotations/a1/s1/{ann_id}",
+            json={"page_index": 1, "content": "Moved to page 1"},
+            headers=headers,
+        )
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["success"] is True
+
+    def test_delete_annotation(
+        self, agent_client: Any, auth_headers: dict, tmp_storage_path: Path
+    ) -> None:
+        """DELETE /annotations/{aid}/{sid}/{annot_id} removes the annotation."""
+        _skip_if_no_fastapi()
+        _create_annotated_pdf(tmp_storage_path, "a1", "s1")
+        headers = _annotation_headers(auth_headers)
+
+        # List to get annotation count and ID
+        list_resp = agent_client.get("/annotations/a1/s1", headers=headers)
+        annotations = list_resp.json()["annotations"]
+        page0_count = len(annotations["0"])
+        ann_id = annotations["0"][0]["id"]
+
+        # Delete it
+        resp = agent_client.delete(
+            f"/annotations/a1/s1/{ann_id}",
+            headers=headers,
+        )
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["success"] is True
+
+        # Verify count decreased
+        list_resp2 = agent_client.get("/annotations/a1/s1", headers=headers)
+        annotations2 = list_resp2.json()["annotations"]
+        page0_after = len(annotations2.get("0", []))
+        assert page0_after == page0_count - 1
+
+    def test_delete_annotation_404(
+        self, agent_client: Any, auth_headers: dict, tmp_storage_path: Path
+    ) -> None:
+        """DELETE with non-existent annotation ID returns 404."""
+        _skip_if_no_fastapi()
+        _create_annotated_pdf(tmp_storage_path, "a1", "s1")
+        headers = _annotation_headers(auth_headers)
+
+        resp = agent_client.delete(
+            "/annotations/a1/s1/nonexistent-id-9999",
+            headers=headers,
+        )
+        assert resp.status_code == 404
+
+    def test_annotation_endpoints_require_auth(
+        self, agent_client: Any, tmp_storage_path: Path
+    ) -> None:
+        """All annotation endpoints require authentication."""
+        _skip_if_no_fastapi()
+        _create_annotated_pdf(tmp_storage_path, "a1", "s1")
+        contract_header = {"X-AEMS-Annotation-Contract-Version": "1"}
+
+        # GET list
+        resp = agent_client.get("/annotations/a1/s1", headers=contract_header)
+        assert resp.status_code == 401
+
+        # GET version
+        resp = agent_client.get("/annotations/a1/s1/version", headers=contract_header)
+        assert resp.status_code == 401
+
+        # POST create
+        resp = agent_client.post(
+            "/annotations/a1/s1",
+            json={"page_index": 0, "content": "x"},
+            headers=contract_header,
+        )
+        assert resp.status_code == 401
+
+        # PUT update
+        resp = agent_client.put(
+            "/annotations/a1/s1/some-id",
+            json={"content": "x"},
+            headers=contract_header,
+        )
+        assert resp.status_code == 401
+
+        # DELETE
+        resp = agent_client.delete(
+            "/annotations/a1/s1/some-id",
+            headers=contract_header,
+        )
+        assert resp.status_code == 401
+
+    def test_annotation_endpoints_require_supported_contract_header(
+        self, agent_client: Any, auth_headers: dict, tmp_storage_path: Path
+    ) -> None:
+        """All annotation endpoints require X-AEMS-Annotation-Contract-Version: 1."""
+        _skip_if_no_fastapi()
+        _create_annotated_pdf(tmp_storage_path, "a1", "s1")
+
+        # No contract header at all
+        resp = agent_client.get("/annotations/a1/s1", headers=auth_headers)
+        assert resp.status_code == 409
+        assert "contract version" in resp.json()["detail"].lower()
+
+        # Wrong version
+        bad_headers = {**auth_headers, "X-AEMS-Annotation-Contract-Version": "99"}
+        resp = agent_client.get("/annotations/a1/s1", headers=bad_headers)
+        assert resp.status_code == 409
+
+        # POST with wrong version
+        resp = agent_client.post(
+            "/annotations/a1/s1",
+            json={"page_index": 0, "content": "x"},
+            headers=bad_headers,
+        )
+        assert resp.status_code == 409
+
+        # PUT with wrong version
+        resp = agent_client.put(
+            "/annotations/a1/s1/some-id",
+            json={"content": "x"},
+            headers=bad_headers,
+        )
+        assert resp.status_code == 409
+
+        # DELETE with wrong version
+        resp = agent_client.delete(
+            "/annotations/a1/s1/some-id",
+            headers=bad_headers,
+        )
+        assert resp.status_code == 409
+
+    def test_capabilities_includes_annotation_crud(self, agent_client: Any) -> None:
+        """GET /capabilities includes annotation_crud in features."""
+        _skip_if_no_fastapi()
+        resp = agent_client.get("/capabilities")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert "annotation_crud" in data["features"]
