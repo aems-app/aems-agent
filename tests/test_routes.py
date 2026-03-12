@@ -34,6 +34,7 @@ class TestCapabilitiesEndpoint:
         data = resp.json()
         assert "agent_version" in data
         assert data["supported_contract_versions"] == [1]
+        assert data["supported_annotation_contract_versions"] == [1]
         assert "encryption_key_id" in data
         assert "public_key_base64" in data
         assert len(data["encryption_key_id"]) == 16
@@ -995,6 +996,22 @@ class TestDataJsonEndpoints:
         assert resp2.status_code == 200
         assert resp2.json() == payload
 
+    def test_put_get_result_json_with_string_ids(
+        self, agent_client: Any, auth_headers: dict
+    ) -> None:
+        _skip_if_no_fastapi()
+        payload = {"feedback_items": [], "annotation_contract_version": 1}
+        resp = agent_client.put(
+            "/data/assign-1/results/sub-1.json",
+            json=payload,
+            headers=auth_headers,
+        )
+        assert resp.status_code == 200
+
+        resp2 = agent_client.get("/data/assign-1/results/sub-1.json", headers=auth_headers)
+        assert resp2.status_code == 200
+        assert resp2.json() == payload
+
     def test_list_results(
         self, agent_client: Any, auth_headers: dict, tmp_storage_path: Path
     ) -> None:
@@ -1078,6 +1095,46 @@ class TestDataJsonEndpoints:
         expected_content = json_mod.dumps(payload, ensure_ascii=False, indent=2).encode("utf-8")
         expected_sha = hashlib.sha256(expected_content).hexdigest()
         assert data["receipt"] == expected_sha
+
+    def test_put_result_invalidates_existing_annotated_pdf(
+        self, agent_client: Any, auth_headers: dict, tmp_storage_path: Path
+    ) -> None:
+        _skip_if_no_fastapi()
+        annotated_path = tmp_storage_path / "assign-1" / "sub-1" / "submission_annotated.pdf"
+        annotated_path.parent.mkdir(parents=True, exist_ok=True)
+        annotated_path.write_bytes(b"%PDF-1.4 stale")
+
+        resp = agent_client.put(
+            "/data/assign-1/results/sub-1.json",
+            json={"feedback_items": [], "annotation_contract_version": 1},
+            headers=auth_headers,
+        )
+        assert resp.status_code == 200
+        assert not annotated_path.exists()
+
+    def test_put_result_json_rejects_malformed_body(
+        self, agent_client: Any, auth_headers: dict
+    ) -> None:
+        _skip_if_no_fastapi()
+        resp = agent_client.put(
+            "/data/100/results/200.json",
+            content=b"{not-json",
+            headers={**auth_headers, "Content-Type": "application/json"},
+        )
+        assert resp.status_code == 400
+        assert "json" in resp.json()["detail"].lower()
+
+    def test_put_assignment_json_rejects_malformed_body(
+        self, agent_client: Any, auth_headers: dict
+    ) -> None:
+        _skip_if_no_fastapi()
+        resp = agent_client.put(
+            "/data/100/assignment.json",
+            content=b"{not-json",
+            headers={**auth_headers, "Content-Type": "application/json"},
+        )
+        assert resp.status_code == 400
+        assert "json" in resp.json()["detail"].lower()
 
 
 class TestCreateAppLogHandlers:
@@ -1237,6 +1294,45 @@ class TestCanvasDownloadRoutes:
         pub_bytes = load_public_key(agent_config_dir)
         pub_key = PublicKey(pub_bytes)
         box = SealedBox(pub_key)
+        ciphertext = box.encrypt(json_mod.dumps(manifest).encode())
+        payload_b64 = base64.b64encode(ciphertext).decode()
+
+        resp = agent_client.post(
+            "/canvas/download-submissions",
+            json={"encrypted_payload": payload_b64},
+            headers=auth_headers,
+        )
+        assert resp.status_code == 403
+        assert "manifest validation failed" in resp.json()["detail"].lower()
+
+    def test_canvas_download_rejects_unapproved_custom_host(
+        self, agent_client: Any, auth_headers: dict, agent_config_dir: Path
+    ) -> None:
+        """Self-hosted Canvas domains must be explicitly allowlisted."""
+        _skip_if_no_fastapi()
+        import base64
+        import json as json_mod
+
+        from nacl.public import PublicKey, SealedBox
+
+        from aems_agent.crypto import get_key_id, load_public_key
+
+        agent_key_id = get_key_id(agent_config_dir)
+        manifest = {
+            "canvas_base_url": "https://canvas.example.edu",
+            "canvas_token": "test_token",
+            "assignment_id": 100,
+            "manifest_version": 1,
+            "expires_at": time.time() + 300,
+            "nonce": "test-nonce",
+            "audience_key_id": agent_key_id,
+            "submissions": [
+                {"submission_id": 1001, "file_id": 569, "download_url": "/files/569/download"}
+            ],
+        }
+
+        pub_bytes = load_public_key(agent_config_dir)
+        box = SealedBox(PublicKey(pub_bytes))
         ciphertext = box.encrypt(json_mod.dumps(manifest).encode())
         payload_b64 = base64.b64encode(ciphertext).decode()
 

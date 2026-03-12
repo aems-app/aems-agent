@@ -131,6 +131,11 @@ def _submission_dir(storage_path: Path, assignment_id: str, submission_id: str) 
     return validate_path_within_storage(storage_path, assignment_id, submission_id)
 
 
+def _annotated_pdf_path(storage_path: Path, assignment_id: str, submission_id: str) -> Path:
+    """Get the annotated PDF path for a submission."""
+    return _submission_dir(storage_path, assignment_id, submission_id) / "submission_annotated.pdf"
+
+
 def _compute_sha256(data: bytes) -> str:
     """Compute SHA-256 hex digest of data."""
     return hashlib.sha256(data).hexdigest()
@@ -221,15 +226,18 @@ async def get_capabilities() -> Dict[str, Any]:
     """Return agent version, supported contract versions, and encryption key."""
     import base64
 
+    from aems_pdf_annotator import SUPPORTED_CONTRACT_VERSIONS
+
     from .crypto import get_key_id, load_public_key
 
     if _config_dir is None:
         raise HTTPException(status_code=500, detail="Agent config not initialized")
+    supported_versions = sorted(SUPPORTED_CONTRACT_VERSIONS)
     return {
         "agent_version": AGENT_VERSION,
-        "supported_contract_versions": [1],
+        "supported_contract_versions": supported_versions,
         "features": ["file_storage", "canvas_download", "local_annotation"],
-        "supported_annotation_contract_versions": [1],
+        "supported_annotation_contract_versions": supported_versions,
         "encryption_key_id": get_key_id(_config_dir),
         "public_key_base64": base64.b64encode(
             load_public_key(_config_dir)
@@ -540,9 +548,10 @@ async def store_annotated(
 # ---------------------------------------------------------------------------
 
 
-def _data_dir(storage_path: Path, aid: int) -> Path:
+def _data_dir(storage_path: Path, aid: str) -> Path:
     """Get the validated _data/{aid} directory path within storage."""
-    return validate_path_within_storage(storage_path, "_data", str(aid))
+    _validate_path_segment(aid, "assignment_id")
+    return validate_path_within_storage(storage_path, "_data", aid)
 
 
 def _write_json_atomic(target: Path, content: bytes) -> Dict[str, Any]:
@@ -576,35 +585,44 @@ async def _read_json_body(request: Request) -> Any:
 
 @router.put("/data/{aid}/results/{sid}.json")
 async def put_result_json(
-    aid: int,
-    sid: int,
+    aid: str,
+    sid: str,
     request: Request,
     _token: str = Depends(_verify_token),
     _rl: None = Depends(_check_rate_limit),
 ) -> Dict[str, Any]:
     """Store a grading result JSON with atomic write and write receipt."""
     storage_path = _get_storage_path()
-    results_dir = validate_path_within_storage(
-        storage_path, "_data", str(aid), "results"
-    )
+    aid = _validate_path_segment(aid, "assignment_id")
+    sid = _validate_path_segment(sid, "submission_id")
+    results_dir = validate_path_within_storage(storage_path, "_data", aid, "results")
     body = await _read_json_body(request)
     content = json.dumps(body, ensure_ascii=False, indent=2).encode("utf-8")
     target = results_dir / f"{sid}.json"
-    return _write_json_atomic(target, content)
+    previous_content = target.read_bytes() if target.exists() else None
+    receipt = _write_json_atomic(target, content)
+
+    if previous_content != content:
+        annotated_path = _annotated_pdf_path(storage_path, aid, sid)
+        with suppress(OSError):
+            if annotated_path.exists():
+                annotated_path.unlink()
+
+    return receipt
 
 
 @router.get("/data/{aid}/results/{sid}.json")
 async def get_result_json(
-    aid: int,
-    sid: int,
+    aid: str,
+    sid: str,
     _token: str = Depends(_verify_token),
     _rl: None = Depends(_check_rate_limit),
 ) -> Any:
     """Retrieve a stored grading result JSON."""
     storage_path = _get_storage_path()
-    results_dir = validate_path_within_storage(
-        storage_path, "_data", str(aid), "results"
-    )
+    aid = _validate_path_segment(aid, "assignment_id")
+    sid = _validate_path_segment(sid, "submission_id")
+    results_dir = validate_path_within_storage(storage_path, "_data", aid, "results")
     target = results_dir / f"{sid}.json"
     if not target.exists():
         raise HTTPException(status_code=404, detail="Result not found")
@@ -613,15 +631,14 @@ async def get_result_json(
 
 @router.get("/data/{aid}/results/")
 async def list_results(
-    aid: int,
+    aid: str,
     _token: str = Depends(_verify_token),
     _rl: None = Depends(_check_rate_limit),
 ) -> Dict[str, Any]:
     """List all stored result files for an assignment."""
     storage_path = _get_storage_path()
-    results_dir = validate_path_within_storage(
-        storage_path, "_data", str(aid), "results"
-    )
+    aid = _validate_path_segment(aid, "assignment_id")
+    results_dir = validate_path_within_storage(storage_path, "_data", aid, "results")
     files: List[str] = []
     if results_dir.exists() and results_dir.is_dir():
         files = sorted(f.name for f in results_dir.glob("*.json"))
@@ -630,7 +647,7 @@ async def list_results(
 
 @router.put("/data/{aid}/assignment.json")
 async def put_assignment_json(
-    aid: int,
+    aid: str,
     request: Request,
     _token: str = Depends(_verify_token),
     _rl: None = Depends(_check_rate_limit),
@@ -646,7 +663,7 @@ async def put_assignment_json(
 
 @router.get("/data/{aid}/assignment.json")
 async def get_assignment_json(
-    aid: int,
+    aid: str,
     _token: str = Depends(_verify_token),
     _rl: None = Depends(_check_rate_limit),
 ) -> Any:

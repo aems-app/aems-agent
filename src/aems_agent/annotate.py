@@ -8,9 +8,7 @@ from typing import Any, Dict, List, Tuple
 from aems_pdf_annotator import PDFAnnotator
 from aems_pdf_annotator.contract import (
     CURRENT_CONTRACT_VERSION,
-    ContractValidationError,
-    feedback_items_to_annotations,
-    validate_contract_version,
+    payload_to_annotations,
 )
 
 logger = logging.getLogger(__name__)
@@ -64,9 +62,6 @@ def generate_annotated_pdf(
 
     # Load and validate results
     results = json.loads(results_path.read_text(encoding="utf-8"))
-    validate_contract_version(results)
-
-    feedback_items: List[Dict[str, Any]] = results.get("feedback_items", [])
     grader_name: str = results.get("grader_name", "AEMS AI")
 
     # Get page dimensions from PDF
@@ -77,9 +72,10 @@ def generate_annotated_pdf(
         for page in doc:
             page_dimensions.append((page.rect.width, page.rect.height))
 
-    # Convert feedback items to annotations
-    annotations = feedback_items_to_annotations(
-        feedback_items, page_dimensions, grader_name=grader_name
+    annotations = payload_to_annotations(
+        results,
+        page_dimensions,
+        grader_name=grader_name,
     )
 
     # Apply annotations to PDF

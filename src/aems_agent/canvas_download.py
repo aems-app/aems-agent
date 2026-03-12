@@ -16,7 +16,7 @@ import secrets
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Callable, Optional
 
 import httpx
 
@@ -27,6 +27,7 @@ logger = logging.getLogger(__name__)
 # Maximum number of concurrent download jobs tracked in memory.
 # Oldest jobs are evicted when this limit is reached.
 MAX_JOBS = 100
+SUPPORTED_MANIFEST_VERSION = 1
 
 
 class ManifestValidationError(Exception):
@@ -64,6 +65,12 @@ def validate_manifest(
     expires_at = manifest.get("expires_at", 0)
     if time.time() > expires_at:
         raise ManifestValidationError("Manifest expired")
+
+    manifest_version = manifest.get("manifest_version")
+    if manifest_version != SUPPORTED_MANIFEST_VERSION:
+        raise ManifestValidationError(
+            f"Unsupported manifest version: {manifest_version!r}"
+        )
 
     # Check HTTPS
     url = manifest.get("canvas_base_url", "")
@@ -107,6 +114,7 @@ async def download_submissions(
     manifest: dict[str, Any],
     storage_path: Path,
     http_client: httpx.AsyncClient,
+    progress_callback: Optional[Callable[[SubmissionResult], None]] = None,
 ) -> list[SubmissionResult]:
     """Download submissions from Canvas. Idempotent: skips existing files.
 
@@ -133,7 +141,10 @@ async def download_submissions(
             expected_size = sub.get("expected_size")
             if expected_size is None or target_file.stat().st_size == expected_size:
                 sha = hashlib.sha256(target_file.read_bytes()).hexdigest()
-                results.append(SubmissionResult(sid, "skipped", sha256=sha))
+                result = SubmissionResult(sid, "skipped", sha256=sha)
+                results.append(result)
+                if progress_callback is not None:
+                    progress_callback(result)
                 continue
 
         # Download
@@ -150,7 +161,10 @@ async def download_submissions(
 
             # Validate PDF magic bytes
             if not content[:5] == b"%PDF-":
-                results.append(SubmissionResult(sid, "failed", error="Not a valid PDF"))
+                result = SubmissionResult(sid, "failed", error="Not a valid PDF")
+                results.append(result)
+                if progress_callback is not None:
+                    progress_callback(result)
                 continue
 
             # Atomic write: temp file then os.replace
@@ -160,10 +174,16 @@ async def download_submissions(
             os.replace(str(tmp), str(target_file))
 
             sha = hashlib.sha256(content).hexdigest()
-            results.append(SubmissionResult(sid, "downloaded", sha256=sha))
+            result = SubmissionResult(sid, "downloaded", sha256=sha)
+            results.append(result)
+            if progress_callback is not None:
+                progress_callback(result)
 
         except Exception as e:
-            results.append(SubmissionResult(sid, "failed", error=str(e)))
+            result = SubmissionResult(sid, "failed", error=str(e))
+            results.append(result)
+            if progress_callback is not None:
+                progress_callback(result)
 
     return results
 
@@ -178,7 +198,7 @@ class DownloadJob:
     """Tracks the state of a download job."""
 
     job_id: str
-    status: str = "pending"  # "pending", "running", "completed", "failed"
+    status: str = "pending"  # "pending", "running", "completed", "completed_with_errors", "failed"
     total_submissions: int = 0
     downloaded: int = 0
     skipped: int = 0
@@ -254,34 +274,34 @@ async def run_download_job(
     job.status = "running"
 
     try:
+        def record_result(result: SubmissionResult) -> None:
+            job.per_submission.append({
+                "submission_id": result.submission_id,
+                "status": result.status,
+                "sha256": result.sha256,
+                "error": result.error,
+            })
+            if result.status == "downloaded":
+                job.downloaded += 1
+            elif result.status == "skipped":
+                job.skipped += 1
+            elif result.status == "failed":
+                job.failed += 1
+
         owns_client = http_client is None
         if owns_client:
             http_client = httpx.AsyncClient()
 
         try:
-            results = await download_submissions(
+            await download_submissions(
                 manifest=manifest,
                 storage_path=storage_path,
                 http_client=http_client,
+                progress_callback=record_result,
             )
         finally:
             if owns_client and http_client is not None:
                 await http_client.aclose()
-
-        # Update job with results
-        for r in results:
-            job.per_submission.append({
-                "submission_id": r.submission_id,
-                "status": r.status,
-                "sha256": r.sha256,
-                "error": r.error,
-            })
-            if r.status == "downloaded":
-                job.downloaded += 1
-            elif r.status == "skipped":
-                job.skipped += 1
-            elif r.status == "failed":
-                job.failed += 1
 
         job.status = "completed" if job.failed == 0 else "completed_with_errors"
 

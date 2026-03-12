@@ -125,6 +125,17 @@ class TestValidateManifest:
                 agent_key_id="test_key_id",
             )
 
+    def test_validate_manifest_rejects_unsupported_version(self) -> None:
+        from aems_agent.canvas_download import ManifestValidationError, validate_manifest
+
+        m = _make_manifest(manifest_version=2)
+        with pytest.raises(ManifestValidationError, match="Unsupported manifest version"):
+            validate_manifest(
+                m,
+                allowed_hosts=["university.instructure.com"],
+                agent_key_id="test_key_id",
+            )
+
 
 # ---------------------------------------------------------------------------
 # Idempotent Download Tests
@@ -300,6 +311,40 @@ class TestDownloadSubmissions:
         assert results[0].status == "downloaded"
         assert (pdf_dir / "submission.pdf").read_bytes() == new_content
 
+    @pytest.mark.asyncio
+    async def test_download_reports_progress_per_submission(self, tmp_path: Path) -> None:
+        """Each submission result is reported as soon as it finishes."""
+        from aems_agent.canvas_download import SubmissionResult, download_submissions
+
+        pdf_content = b"%PDF-1.4 first"
+        mock_response = AsyncMock()
+        mock_response.content = pdf_content
+        mock_response.raise_for_status = lambda: None
+
+        mock_client = AsyncMock()
+        mock_client.get.return_value = mock_response
+
+        manifest = _make_manifest(
+            submissions=[
+                {"submission_id": 1001, "file_id": 569, "download_url": "/files/569/download"},
+                {"submission_id": 1002, "file_id": 570, "download_url": "/files/570/download"},
+            ]
+        )
+        seen: list[SubmissionResult] = []
+
+        def progress_callback(result: SubmissionResult) -> None:
+            seen.append(result)
+
+        results = await download_submissions(
+            manifest=manifest,
+            storage_path=tmp_path,
+            http_client=mock_client,
+            progress_callback=progress_callback,
+        )
+
+        assert [result.submission_id for result in seen] == [1001, 1002]
+        assert [result.submission_id for result in results] == [1001, 1002]
+
 
 # ---------------------------------------------------------------------------
 # DownloadJob Tests
@@ -360,6 +405,60 @@ class TestDownloadJob:
         assert job.status == "completed"
         assert job.downloaded == 1
         assert len(job.per_submission) == 1
+
+    @pytest.mark.asyncio
+    async def test_run_download_job_updates_progress_incrementally(self, tmp_path: Path) -> None:
+        from aems_agent.canvas_download import create_download_job, get_download_job, run_download_job
+
+        pdf_content = b"%PDF-1.4 progress"
+        mock_response = AsyncMock()
+        mock_response.content = pdf_content
+        mock_response.raise_for_status = lambda: None
+
+        class SlowClient:
+            def __init__(self) -> None:
+                self.calls = 0
+
+            async def get(self, *args: Any, **kwargs: Any) -> Any:
+                import asyncio
+
+                self.calls += 1
+                if self.calls == 1:
+                    await asyncio.sleep(0.05)
+                return mock_response
+
+        manifest = _make_manifest(
+            submissions=[
+                {"submission_id": 1001, "file_id": 569, "download_url": "/files/569/download"},
+                {"submission_id": 1002, "file_id": 570, "download_url": "/files/570/download"},
+            ]
+        )
+        job_id = create_download_job(manifest)
+
+        import asyncio
+
+        task = asyncio.create_task(
+            run_download_job(
+                job_id=job_id,
+                manifest=manifest,
+                storage_path=tmp_path,
+                http_client=SlowClient(),
+            )
+        )
+        await asyncio.sleep(0.01)
+
+        job = get_download_job(job_id)
+        assert job is not None
+        assert job.status == "running"
+        assert job.downloaded == 0
+
+        await asyncio.sleep(0.08)
+        job = get_download_job(job_id)
+        assert job is not None
+        assert job.downloaded >= 1
+        assert len(job.per_submission) >= 1
+
+        await task
 
     def test_job_store_max_size(self) -> None:
         """Job store evicts old entries when at max capacity."""
