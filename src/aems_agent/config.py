@@ -85,6 +85,10 @@ class AgentConfig(BaseModel):
         default_factory=list,
         description="Origins that have completed pairing (auto-populated)",
     )
+    canvas_allowed_hosts: List[str] = Field(
+        default_factory=list,
+        description="Extra Canvas hostnames allowed in download manifests (for self-hosted Canvas instances)",
+    )
     @field_validator("storage_path")
     @classmethod
     def validate_storage_path(cls, v: Optional[str]) -> Optional[str]:

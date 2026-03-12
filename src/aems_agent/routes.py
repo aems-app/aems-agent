@@ -694,19 +694,19 @@ async def canvas_download_submissions(
     except Exception:
         raise HTTPException(status_code=400, detail="Failed to decrypt manifest")
 
-    # Build allowed hosts from config origins + *.instructure.com wildcard
-    allowed_hosts: list[str] = []
-    for origin in config.allowed_origins + config.paired_origins:
-        h = urlparse(origin).hostname
-        if h:
-            allowed_hosts.append(h)
+    # Build allowed hosts: config canvas_allowed_hosts + manifest's own canvas_base_url hostname
+    allowed_hosts: list[str] = list(config.canvas_allowed_hosts)
+    manifest_canvas_host = urlparse(manifest.get("canvas_base_url", "")).hostname
+    if manifest_canvas_host and manifest_canvas_host not in allowed_hosts:
+        allowed_hosts.append(manifest_canvas_host)
 
     agent_key_id = get_key_id(_config_dir)
 
     try:
         validate_manifest(manifest, allowed_hosts=allowed_hosts, agent_key_id=agent_key_id)
     except ManifestValidationError as e:
-        raise HTTPException(status_code=403, detail=str(e))
+        logger.warning("Manifest validation failed: %s", e)
+        raise HTTPException(status_code=403, detail="Manifest validation failed")
 
     # Create job and start background download
     if not config.storage_path:

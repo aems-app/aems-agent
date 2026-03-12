@@ -1246,4 +1246,4 @@ class TestCanvasDownloadRoutes:
             headers=auth_headers,
         )
         assert resp.status_code == 403
-        assert "expired" in resp.json()["detail"].lower()
+        assert "manifest validation failed" in resp.json()["detail"].lower()
