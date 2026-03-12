@@ -12,7 +12,7 @@ import hashlib
 import os
 from pathlib import Path
 
-from nacl.public import PrivateKey, PublicKey, SealedBox  # type: ignore[import-untyped]
+from nacl.public import PrivateKey, PublicKey, SealedBox
 
 _PRIVATE_KEY_FILE = "agent_private.key"
 _PUBLIC_KEY_FILE = "agent_public.key"

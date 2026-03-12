@@ -64,6 +64,8 @@ module = [
     "uvicorn",
     "uvicorn.*",
     "httpx",
+    "nacl",
+    "nacl.*",
     "pystray",
 ]
 ignore_missing_imports = true
