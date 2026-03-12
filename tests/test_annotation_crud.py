@@ -535,7 +535,7 @@ class TestUpdateAnnotation:
     ) -> None:
         from aems_agent.annotation_crud import update_annotation
 
-        with pytest.raises(ValueError, match="not found"):
+        with pytest.raises(FileNotFoundError, match="not found"):
             update_annotation(
                 annotated_pdf,
                 "nonexistent-id-12345",
@@ -612,7 +612,7 @@ class TestDeleteAnnotation:
     ) -> None:
         from aems_agent.annotation_crud import delete_annotation
 
-        with pytest.raises(ValueError, match="not found"):
+        with pytest.raises(FileNotFoundError, match="not found"):
             delete_annotation(annotated_pdf, "nonexistent-id-12345")
 
     def test_delete_reduces_annotation_count(self, annotated_pdf: Path) -> None:

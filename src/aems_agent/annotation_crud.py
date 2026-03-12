@@ -431,12 +431,6 @@ def add_annotation(pdf_path: Path, payload: Dict[str, Any]) -> Dict[str, Any]:
 
     if content:
         _validate_content(content)
-    elif kind_str not in ("drawing", "textbox"):
-        # Non-drawing, non-textbox annotations require content
-        pass  # Allow empty content for text notes too (server does)
-
-    if len(content) > MAX_COMMENT_LENGTH:
-        raise ValueError(f"content exceeds maximum length of {MAX_COMMENT_LENGTH} characters")
 
     # Kind
     kind = _validate_kind(kind_str)
@@ -584,7 +578,8 @@ def update_annotation(
 ) -> Dict[str, Any]:
     """Update an existing annotation.
 
-    Raises ``ValueError`` on invalid input or if the annotation is not found.
+    Raises ``ValueError`` on invalid input, ``FileNotFoundError`` if the
+    annotation is not found.
     """
     _validate_annotation_id(annotation_id)
     xref_value, stable_id = resolve_annotation_identifier(annotation_id)
@@ -631,13 +626,27 @@ def update_annotation(
     # Build the canonical identifier for the shared package
     canonical_identifier = stable_id or (str(xref_value) if xref_value else annotation_id)
 
-    # Grader name fallback
-    if not grader_name:
-        grader_name = "Teacher"
-
     lock = _get_pdf_lock(pdf_path)
     with lock:
         with PDFAnnotator(pdf_path) as annotator:
+            # Grader name fallback: payload > existing annotation author > "Teacher"
+            if not grader_name:
+                existing = annotator.find_annotation_by_id(
+                    canonical_identifier
+                ) if stable_id else None
+                if not existing and xref_value is not None:
+                    existing = annotator.find_annotation_by_xref(xref_value)
+                if existing:
+                    page_idx_existing, _annot_obj = existing
+                    page_anns = annotator.get_annotations_on_page(page_idx_existing)
+                    found = select_annotation_entry(
+                        page_anns, stable_id=stable_id, xref=xref_value
+                    )
+                    if found:
+                        grader_name = found.get("grader_name") or None
+                if not grader_name:
+                    grader_name = "Teacher"
+
             rect_tuple = tuple(new_rect) if new_rect is not None else None
 
             update_result = annotator.update_annotation(
@@ -662,7 +671,7 @@ def update_annotation(
                 success = update_result
 
             if not success:
-                raise ValueError("Annotation not found or update failed")
+                raise FileNotFoundError("Annotation not found or update failed")
 
             annotator.save()
 
@@ -696,7 +705,7 @@ def update_annotation(
 def delete_annotation(pdf_path: Path, annotation_id: str) -> Dict[str, Any]:
     """Delete an annotation from the PDF.
 
-    Raises ``ValueError`` if the annotation is not found.
+    Raises ``FileNotFoundError`` if the annotation is not found.
     """
     _validate_annotation_id(annotation_id)
     xref_value, stable_id = resolve_annotation_identifier(annotation_id)
@@ -708,7 +717,7 @@ def delete_annotation(pdf_path: Path, annotation_id: str) -> Dict[str, Any]:
         with PDFAnnotator(pdf_path) as annotator:
             success = annotator.delete_annotation(canonical_identifier)
             if not success:
-                raise ValueError("Annotation not found or delete failed")
+                raise FileNotFoundError("Annotation not found or delete failed")
             annotator.save()
 
     return {"success": True, "message": "Annotation deleted"}
