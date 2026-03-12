@@ -23,6 +23,48 @@ def _reset_pairing_rate_limiters() -> None:
     routes._pairing_rate_limiter.reset()
 
 
+class TestCapabilitiesEndpoint:
+    """Tests for GET /capabilities (no auth required)."""
+
+    def test_capabilities_returns_agent_info(self, agent_client: Any) -> None:
+        """GET /capabilities returns version, contract versions, and key ID."""
+        _skip_if_no_fastapi()
+        resp = agent_client.get("/capabilities")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert "agent_version" in data
+        assert data["supported_contract_versions"] == [1]
+        assert "encryption_key_id" in data
+        assert "public_key_base64" in data
+        assert len(data["encryption_key_id"]) == 16
+
+    def test_capabilities_no_auth_required(self, agent_client: Any) -> None:
+        """GET /capabilities works without bearer token."""
+        _skip_if_no_fastapi()
+        resp = agent_client.get("/capabilities")  # no auth headers
+        assert resp.status_code == 200
+
+    def test_capabilities_has_features(self, agent_client: Any) -> None:
+        """GET /capabilities includes features list."""
+        _skip_if_no_fastapi()
+        resp = agent_client.get("/capabilities")
+        data = resp.json()
+        assert "features" in data
+        assert "file_storage" in data["features"]
+        assert "canvas_download" in data["features"]
+
+    def test_capabilities_public_key_is_valid_base64(self, agent_client: Any) -> None:
+        """GET /capabilities returns a valid base64-encoded public key."""
+        _skip_if_no_fastapi()
+        import base64
+
+        resp = agent_client.get("/capabilities")
+        data = resp.json()
+        raw = base64.b64decode(data["public_key_base64"])
+        # X25519 public key is 32 bytes
+        assert len(raw) == 32
+
+
 class TestStatusEndpoint:
     """Tests for GET /status (no auth required)."""
 

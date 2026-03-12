@@ -24,6 +24,7 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.responses import Response as StarletteResponse
 
 from .config import AGENT_VERSION, API_VERSION, ensure_auth_token, get_config_dir, load_config
+from .crypto import ensure_keypair
 from .routes import router, set_agent_globals
 
 logger = logging.getLogger(__name__)
@@ -92,6 +93,7 @@ def create_app(
 
     config = load_config(config_dir)
     auth_token = ensure_auth_token(config_dir)
+    ensure_keypair(config_dir)
 
     # Set up file logging
     _setup_logging(config_dir)

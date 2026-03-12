@@ -3,6 +3,7 @@ FastAPI router with all AEMS Local Bridge Agent endpoints.
 
 Endpoint summary:
     GET  /status                                        - Alive check (no auth)
+    GET  /capabilities                                  - Discovery / public key (no auth)
     GET  /health                                        - Detailed health (auth)
     GET  /config/path                                   - Get storage path (auth)
     PUT  /config/path                                   - Set storage path (auth)
@@ -202,6 +203,26 @@ async def status() -> Dict[str, Any]:
         "api_version": API_VERSION,
         "min_client_version": MIN_CLIENT_API_VERSION,
         "storage_configured": bool(config.storage_path),
+    }
+
+
+@router.get("/capabilities")
+async def get_capabilities() -> Dict[str, Any]:
+    """Return agent version, supported contract versions, and encryption key."""
+    import base64
+
+    from .crypto import get_key_id, load_public_key
+
+    if _config_dir is None:
+        raise HTTPException(status_code=500, detail="Agent config not initialized")
+    return {
+        "agent_version": AGENT_VERSION,
+        "supported_contract_versions": [1],
+        "features": ["file_storage", "canvas_download"],
+        "encryption_key_id": get_key_id(_config_dir),
+        "public_key_base64": base64.b64encode(
+            load_public_key(_config_dir)
+        ).decode(),
     }
 
 
