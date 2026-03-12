@@ -972,6 +972,114 @@ class TestStatusExactFields:
 # ---------------------------------------------------------------------------
 
 
+class TestDataJsonEndpoints:
+    """Tests for /data/ JSON storage endpoints."""
+
+    def test_put_get_result_json(
+        self, agent_client: Any, auth_headers: dict, tmp_storage_path: Path
+    ) -> None:
+        """PUT then GET a grading result JSON."""
+        _skip_if_no_fastapi()
+        payload = {"mark_results": [{"verdict": "PASS"}], "annotation_contract_version": 1}
+        resp = agent_client.put(
+            "/data/100/results/200.json",
+            json=payload,
+            headers=auth_headers,
+        )
+        assert resp.status_code == 200
+        data = resp.json()
+        assert "receipt" in data  # SHA-256 of written content
+        assert "written_at" in data
+
+        resp2 = agent_client.get("/data/100/results/200.json", headers=auth_headers)
+        assert resp2.status_code == 200
+        assert resp2.json() == payload
+
+    def test_list_results(
+        self, agent_client: Any, auth_headers: dict, tmp_storage_path: Path
+    ) -> None:
+        """GET /data/{aid}/results/ lists all stored result files."""
+        _skip_if_no_fastapi()
+        for sid in [201, 202, 203]:
+            agent_client.put(
+                f"/data/100/results/{sid}.json",
+                json={"sid": sid},
+                headers=auth_headers,
+            )
+        resp = agent_client.get("/data/100/results/", headers=auth_headers)
+        assert resp.status_code == 200
+        data = resp.json()
+        assert len(data["results"]) == 3
+
+    def test_put_get_assignment_json(
+        self, agent_client: Any, auth_headers: dict, tmp_storage_path: Path
+    ) -> None:
+        """PUT then GET assignment metadata."""
+        _skip_if_no_fastapi()
+        payload = {"name": "Exam 1", "course_id": 42}
+        resp = agent_client.put(
+            "/data/100/assignment.json",
+            json=payload,
+            headers=auth_headers,
+        )
+        assert resp.status_code == 200
+        resp2 = agent_client.get("/data/100/assignment.json", headers=auth_headers)
+        assert resp2.json() == payload
+
+    def test_data_requires_auth(self, agent_client: Any) -> None:
+        """Data endpoints require bearer token."""
+        _skip_if_no_fastapi()
+        resp = agent_client.get("/data/100/results/200.json")
+        assert resp.status_code == 401
+
+    def test_data_path_traversal_blocked(
+        self, agent_client: Any, auth_headers: dict
+    ) -> None:
+        """Path traversal attempts are rejected."""
+        _skip_if_no_fastapi()
+        resp = agent_client.get("/data/../secrets/200.json", headers=auth_headers)
+        assert resp.status_code in (400, 403, 404, 422)
+
+    def test_result_not_found(self, agent_client: Any, auth_headers: dict) -> None:
+        """GET for non-existent result returns 404."""
+        _skip_if_no_fastapi()
+        resp = agent_client.get("/data/999/results/999.json", headers=auth_headers)
+        assert resp.status_code == 404
+
+    def test_assignment_not_found(self, agent_client: Any, auth_headers: dict) -> None:
+        """GET for non-existent assignment returns 404."""
+        _skip_if_no_fastapi()
+        resp = agent_client.get("/data/999/assignment.json", headers=auth_headers)
+        assert resp.status_code == 404
+
+    def test_list_empty_results(self, agent_client: Any, auth_headers: dict) -> None:
+        """GET /data/{aid}/results/ with no stored results returns empty list."""
+        _skip_if_no_fastapi()
+        resp = agent_client.get("/data/999/results/", headers=auth_headers)
+        assert resp.status_code == 200
+        assert resp.json()["results"] == []
+
+    def test_put_result_receipt_is_sha256(
+        self, agent_client: Any, auth_headers: dict, tmp_storage_path: Path
+    ) -> None:
+        """Write receipt contains valid SHA-256 hex digest."""
+        _skip_if_no_fastapi()
+        import json as json_mod
+
+        payload = {"test": True}
+        resp = agent_client.put(
+            "/data/100/results/300.json",
+            json=payload,
+            headers=auth_headers,
+        )
+        assert resp.status_code == 200
+        data = resp.json()
+        # Receipt should be SHA-256 of the written content
+        expected_content = json_mod.dumps(payload, ensure_ascii=False, indent=2).encode("utf-8")
+        expected_sha = hashlib.sha256(expected_content).hexdigest()
+        assert data["receipt"] == expected_sha
+
+
 class TestCreateAppLogHandlers:
     """Ensure repeated create_app() doesn't duplicate log handlers."""
 

@@ -13,10 +13,16 @@ Endpoint summary:
     DELETE /files/{assignment_id}/{submission_id}        - Delete PDF (auth)
     GET  /files/{assignment_id}/{submission_id}/annotated - Download annotated (auth)
     PUT  /files/{assignment_id}/{submission_id}/annotated - Store annotated (auth)
+    PUT  /data/{aid}/results/{sid}.json                 - Store result JSON (auth)
+    GET  /data/{aid}/results/{sid}.json                 - Get result JSON (auth)
+    GET  /data/{aid}/results/                           - List result files (auth)
+    PUT  /data/{aid}/assignment.json                    - Store assignment JSON (auth)
+    GET  /data/{aid}/assignment.json                    - Get assignment JSON (auth)
 """
 
 import asyncio
 import hashlib
+import json
 import logging
 import os
 import random
@@ -26,6 +32,7 @@ import shutil
 import tempfile
 import time
 from contextlib import suppress
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 from urllib.parse import urlparse
@@ -522,6 +529,122 @@ async def store_annotated(
         "size": len(data),
         "sha256": actual_sha256,
     }
+
+
+# ---------------------------------------------------------------------------
+# Data JSON Storage Endpoints
+# ---------------------------------------------------------------------------
+
+
+def _data_dir(storage_path: Path, aid: int) -> Path:
+    """Get the validated _data/{aid} directory path within storage."""
+    return validate_path_within_storage(storage_path, "_data", str(aid))
+
+
+def _write_json_atomic(target: Path, content: bytes) -> Dict[str, Any]:
+    """
+    Atomically write JSON content to *target* and return a write receipt.
+
+    Writes to a temporary file first, then uses os.replace() for atomicity.
+    Returns dict with ``receipt`` (SHA-256 hex) and ``written_at`` (ISO 8601).
+    """
+    sha = hashlib.sha256(content).hexdigest()
+    target.parent.mkdir(parents=True, exist_ok=True)
+    tmp = target.with_suffix(".tmp")
+    try:
+        tmp.write_bytes(content)
+        os.replace(str(tmp), str(target))
+    except Exception:
+        with suppress(OSError):
+            tmp.unlink()
+        raise
+    now = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+    return {"receipt": sha, "written_at": now}
+
+
+@router.put("/data/{aid}/results/{sid}.json")
+async def put_result_json(
+    aid: int,
+    sid: int,
+    request: Request,
+    _token: str = Depends(_verify_token),
+    _rl: None = Depends(_check_rate_limit),
+) -> Dict[str, Any]:
+    """Store a grading result JSON with atomic write and write receipt."""
+    storage_path = _get_storage_path()
+    results_dir = validate_path_within_storage(
+        storage_path, "_data", str(aid), "results"
+    )
+    body = await request.json()
+    content = json.dumps(body, ensure_ascii=False, indent=2).encode("utf-8")
+    target = results_dir / f"{sid}.json"
+    return _write_json_atomic(target, content)
+
+
+@router.get("/data/{aid}/results/{sid}.json")
+async def get_result_json(
+    aid: int,
+    sid: int,
+    _token: str = Depends(_verify_token),
+    _rl: None = Depends(_check_rate_limit),
+) -> Any:
+    """Retrieve a stored grading result JSON."""
+    storage_path = _get_storage_path()
+    results_dir = validate_path_within_storage(
+        storage_path, "_data", str(aid), "results"
+    )
+    target = results_dir / f"{sid}.json"
+    if not target.exists():
+        raise HTTPException(status_code=404, detail="Result not found")
+    return json.loads(target.read_bytes())
+
+
+@router.get("/data/{aid}/results/")
+async def list_results(
+    aid: int,
+    _token: str = Depends(_verify_token),
+    _rl: None = Depends(_check_rate_limit),
+) -> Dict[str, Any]:
+    """List all stored result files for an assignment."""
+    storage_path = _get_storage_path()
+    results_dir = validate_path_within_storage(
+        storage_path, "_data", str(aid), "results"
+    )
+    files: List[str] = []
+    if results_dir.exists() and results_dir.is_dir():
+        files = sorted(f.name for f in results_dir.glob("*.json"))
+    return {"assignment_id": aid, "results": files}
+
+
+@router.put("/data/{aid}/assignment.json")
+async def put_assignment_json(
+    aid: int,
+    request: Request,
+    _token: str = Depends(_verify_token),
+    _rl: None = Depends(_check_rate_limit),
+) -> Dict[str, Any]:
+    """Store assignment metadata JSON with atomic write and write receipt."""
+    storage_path = _get_storage_path()
+    data_dir = _data_dir(storage_path, aid)
+    body = await request.json()
+    content = json.dumps(body, ensure_ascii=False, indent=2).encode("utf-8")
+    target = data_dir / "assignment.json"
+    return _write_json_atomic(target, content)
+
+
+@router.get("/data/{aid}/assignment.json")
+async def get_assignment_json(
+    aid: int,
+    _token: str = Depends(_verify_token),
+    _rl: None = Depends(_check_rate_limit),
+) -> Any:
+    """Retrieve stored assignment metadata JSON."""
+    storage_path = _get_storage_path()
+    data_dir = _data_dir(storage_path, aid)
+    target = data_dir / "assignment.json"
+    if not target.exists():
+        raise HTTPException(status_code=404, detail="Assignment metadata not found")
+    return json.loads(target.read_bytes())
 
 
 # ---------------------------------------------------------------------------
