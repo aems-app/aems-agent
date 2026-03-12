@@ -227,7 +227,8 @@ async def get_capabilities() -> Dict[str, Any]:
     return {
         "agent_version": AGENT_VERSION,
         "supported_contract_versions": [1],
-        "features": ["file_storage", "canvas_download"],
+        "features": ["file_storage", "canvas_download", "local_annotation"],
+        "supported_annotation_contract_versions": [1],
         "encryption_key_id": get_key_id(_config_dir),
         "public_key_base64": base64.b64encode(
             load_public_key(_config_dir)
@@ -564,6 +565,14 @@ def _write_json_atomic(target: Path, content: bytes) -> Dict[str, Any]:
     return {"receipt": sha, "written_at": now}
 
 
+async def _read_json_body(request: Request) -> Any:
+    """Read JSON request bodies and return a 400 on malformed JSON."""
+    try:
+        return await request.json()
+    except json.JSONDecodeError as exc:
+        raise HTTPException(status_code=400, detail="Malformed JSON body") from exc
+
+
 @router.put("/data/{aid}/results/{sid}.json")
 async def put_result_json(
     aid: int,
@@ -577,7 +586,7 @@ async def put_result_json(
     results_dir = validate_path_within_storage(
         storage_path, "_data", str(aid), "results"
     )
-    body = await request.json()
+    body = await _read_json_body(request)
     content = json.dumps(body, ensure_ascii=False, indent=2).encode("utf-8")
     target = results_dir / f"{sid}.json"
     return _write_json_atomic(target, content)
@@ -628,7 +637,7 @@ async def put_assignment_json(
     """Store assignment metadata JSON with atomic write and write receipt."""
     storage_path = _get_storage_path()
     data_dir = _data_dir(storage_path, aid)
-    body = await request.json()
+    body = await _read_json_body(request)
     content = json.dumps(body, ensure_ascii=False, indent=2).encode("utf-8")
     target = data_dir / "assignment.json"
     return _write_json_atomic(target, content)
@@ -694,11 +703,9 @@ async def canvas_download_submissions(
     except Exception:
         raise HTTPException(status_code=400, detail="Failed to decrypt manifest")
 
-    # Build allowed hosts: config canvas_allowed_hosts + manifest's own canvas_base_url hostname
+    # Canvas SaaS hosts are allowed by validate_manifest() via the Instructure wildcard.
+    # Self-hosted Canvas instances must be explicitly allowlisted in config.
     allowed_hosts: list[str] = list(config.canvas_allowed_hosts)
-    manifest_canvas_host = urlparse(manifest.get("canvas_base_url", "")).hostname
-    if manifest_canvas_host and manifest_canvas_host not in allowed_hosts:
-        allowed_hosts.append(manifest_canvas_host)
 
     agent_key_id = get_key_id(_config_dir)
 

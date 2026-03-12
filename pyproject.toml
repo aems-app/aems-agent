@@ -18,6 +18,8 @@ dependencies = [
     "typer>=0.9.0",
     "pydantic>=2.0.0",
     "pynacl>=1.5.0",
+    "aems-pdf-annotator @ file:///D:/Temp/Artem/aems-pdf-annotator",
+    "pymupdf>=1.25.0",
 ]
 
 [project.optional-dependencies]
@@ -35,6 +37,9 @@ dev = [
 
 [project.scripts]
 aems-agent = "aems_agent.cli:main"
+
+[tool.hatch.metadata]
+allow-direct-references = true
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/aems_agent"]
@@ -67,6 +72,10 @@ module = [
     "nacl",
     "nacl.*",
     "pystray",
+    "aems_pdf_annotator",
+    "aems_pdf_annotator.*",
+    "fitz",
+    "fitz.*",
 ]
 ignore_missing_imports = true
 
