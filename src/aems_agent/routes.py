@@ -18,6 +18,7 @@ Endpoint summary:
     GET  /data/{aid}/results/                           - List result files (auth)
     PUT  /data/{aid}/assignment.json                    - Store assignment JSON (auth)
     GET  /data/{aid}/assignment.json                    - Get assignment JSON (auth)
+    POST /annotate/{assignment_id}/{submission_id}       - Generate annotated PDF (auth)
     POST /canvas/download-submissions                   - Start download job (auth, encrypted)
     GET  /canvas/download-jobs/{job_id}                 - Poll download progress (auth)
 """
@@ -656,6 +657,47 @@ async def get_assignment_json(
     if not target.exists():
         raise HTTPException(status_code=404, detail="Assignment metadata not found")
     return json.loads(target.read_bytes())
+
+
+# ---------------------------------------------------------------------------
+# Annotation Generation Endpoint
+# ---------------------------------------------------------------------------
+
+
+@router.post("/annotate/{assignment_id}/{submission_id}")
+async def annotate_submission(
+    assignment_id: str,
+    submission_id: str,
+    force: bool = False,
+    _token: str = Depends(_verify_token),
+    _rl: None = Depends(_check_rate_limit),
+) -> Dict[str, Any]:
+    """Generate annotated PDF from stored results and submission PDF."""
+    from aems_pdf_annotator.contract import ContractValidationError
+
+    from .annotate import generate_annotated_pdf
+
+    config = _get_config()
+    if not config.storage_path:
+        raise HTTPException(status_code=400, detail="Storage path not configured")
+
+    # Validate path components
+    _validate_path_segment(assignment_id, "assignment_id")
+    _validate_path_segment(submission_id, "submission_id")
+
+    storage = Path(config.storage_path)
+    try:
+        result = generate_annotated_pdf(
+            storage, assignment_id, submission_id, force=force
+        )
+        return result
+    except FileNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except ContractValidationError as e:
+        raise HTTPException(status_code=422, detail=str(e))
+    except Exception:
+        logger.exception("Annotation generation failed")
+        raise HTTPException(status_code=500, detail="Annotation generation failed")
 
 
 # ---------------------------------------------------------------------------
