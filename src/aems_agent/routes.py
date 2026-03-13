@@ -26,6 +26,7 @@ Endpoint summary:
     DELETE /annotations/{aid}/{sid}/{annot_id}           - Delete annotation (auth)
     POST /canvas/download-submissions                   - Start download job (auth, encrypted)
     GET  /canvas/download-jobs/{job_id}                 - Poll download progress (auth)
+    POST /grading-bundle/{aid}/{sid}                    - Generate grading input bundle (auth)
 """
 
 import asyncio
@@ -242,7 +243,8 @@ async def get_capabilities() -> Dict[str, Any]:
     return {
         "agent_version": AGENT_VERSION,
         "supported_contract_versions": supported_versions,
-        "features": ["file_storage", "canvas_download", "local_annotation", "annotation_crud"],
+        "features": ["file_storage", "canvas_download", "local_annotation", "annotation_crud", "grading_bundle"],
+        "supported_bundle_versions": [1],
         "supported_annotation_contract_versions": supported_versions,
         "encryption_key_id": get_key_id(_config_dir),
         "public_key_base64": base64.b64encode(
@@ -680,6 +682,54 @@ async def get_assignment_json(
     if not target.exists():
         raise HTTPException(status_code=404, detail="Assignment metadata not found")
     return json.loads(target.read_bytes())
+
+
+# ---------------------------------------------------------------------------
+# Grading Bundle Endpoint
+# ---------------------------------------------------------------------------
+
+
+@router.post("/grading-bundle/{aid}/{sid}")
+async def create_grading_bundle(
+    aid: str,
+    sid: str,
+    request: Request,
+    _token: str = Depends(_verify_token),
+    _rl: None = Depends(_check_rate_limit),
+) -> Dict[str, Any]:
+    """Generate a grading input bundle from the submission PDF."""
+    storage_path = _get_storage_path()
+    aid = _validate_path_segment(aid, "assignment_id")
+    sid = _validate_path_segment(sid, "submission_id")
+
+    body = await _read_json_body(request)
+    strategy = body.get("strategy", "text_only")
+    dpi = body.get("dpi", 150)
+    max_pages = body.get("max_pages")
+    force_refresh = body.get("force_refresh", False)
+
+    # Validate strategy
+    if strategy not in ("text_only", "multimodal", "smart"):
+        raise HTTPException(status_code=400, detail=f"Invalid strategy: {strategy}")
+
+    pdf_path = validate_path_within_storage(storage_path, aid, sid, "submission.pdf")
+    if not pdf_path.exists():
+        raise HTTPException(status_code=404, detail="Submission PDF not found")
+
+    cache_dir = Path(storage_path) / "_cache" / "bundles" / aid / sid
+
+    from aems_agent.grading_bundle import generate_bundle
+    bundle = generate_bundle(
+        pdf_path,
+        strategy=strategy,
+        dpi=dpi,
+        max_pages=max_pages,
+        cache_dir=cache_dir,
+        force_refresh=force_refresh,
+    )
+    bundle["assignment_id"] = aid
+    bundle["submission_id"] = sid
+    return bundle
 
 
 # ---------------------------------------------------------------------------

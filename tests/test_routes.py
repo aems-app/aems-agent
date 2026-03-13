@@ -1688,3 +1688,76 @@ class TestAnnotationCrudEndpoints:
         assert resp.status_code == 200
         data = resp.json()
         assert "annotation_crud" in data["features"]
+
+
+# ---------------------------------------------------------------------------
+# Grading Bundle Route Tests
+# ---------------------------------------------------------------------------
+
+
+class TestGradingBundleEndpoint:
+    """Tests for POST /grading-bundle/{aid}/{sid}."""
+
+    def _create_submission_pdf(self, storage_path: Path, aid: str, sid: str) -> None:
+        """Helper to create a test submission PDF."""
+        import fitz
+        pdf_dir = storage_path / aid / sid
+        pdf_dir.mkdir(parents=True, exist_ok=True)
+        doc = fitz.open()
+        page = doc.new_page(width=612, height=792)
+        page.insert_text((72, 100), "Test student answer", fontsize=12)
+        doc.save(str(pdf_dir / "submission.pdf"))
+        doc.close()
+
+    def test_generates_bundle(
+        self, agent_client: Any, tmp_storage_path: Path, auth_headers: dict
+    ) -> None:
+        _skip_if_no_fastapi()
+        self._create_submission_pdf(tmp_storage_path, "a1", "s1")
+        resp = agent_client.post(
+            "/grading-bundle/a1/s1",
+            json={"strategy": "text_only", "dpi": 72},
+            headers=auth_headers,
+        )
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["bundle_version"] == 1
+        assert len(data["pages"]) > 0
+        assert data["assignment_id"] == "a1"
+        assert data["submission_id"] == "s1"
+
+    def test_404_missing_pdf(self, agent_client: Any, auth_headers: dict) -> None:
+        _skip_if_no_fastapi()
+        resp = agent_client.post(
+            "/grading-bundle/a1/nonexistent",
+            json={"strategy": "text_only"},
+            headers=auth_headers,
+        )
+        assert resp.status_code == 404
+
+    def test_requires_auth(self, agent_client: Any) -> None:
+        _skip_if_no_fastapi()
+        resp = agent_client.post("/grading-bundle/a1/s1", json={"strategy": "text_only"})
+        assert resp.status_code == 401
+
+    def test_invalid_strategy_returns_400(
+        self, agent_client: Any, tmp_storage_path: Path, auth_headers: dict
+    ) -> None:
+        _skip_if_no_fastapi()
+        self._create_submission_pdf(tmp_storage_path, "a1", "s1")
+        resp = agent_client.post(
+            "/grading-bundle/a1/s1",
+            json={"strategy": "invalid_strategy"},
+            headers=auth_headers,
+        )
+        assert resp.status_code == 400
+        assert "strategy" in resp.json()["detail"].lower()
+
+    def test_capabilities_includes_grading_bundle(
+        self, agent_client: Any, auth_headers: dict
+    ) -> None:
+        _skip_if_no_fastapi()
+        resp = agent_client.get("/capabilities")
+        data = resp.json()
+        assert "grading_bundle" in data["features"]
+        assert 1 in data["supported_bundle_versions"]
