@@ -604,6 +604,25 @@ async def put_result_json(
     aid = _validate_path_segment(aid, "assignment_id")
     sid = _validate_path_segment(sid, "submission_id")
     results_dir = validate_path_within_storage(storage_path, "_data", aid, "results")
+
+    # Check for delivery_id idempotency before reading the request body
+    delivery_id: str | None = request.headers.get("X-AEMS-Delivery-Id")
+    sidecar_path = results_dir / f"{sid}.delivery"
+
+    if delivery_id:
+        # Check sidecar for existing delivery with same ID
+        try:
+            if sidecar_path.exists():
+                sidecar = json.loads(sidecar_path.read_text(encoding="utf-8"))
+                if sidecar.get("delivery_id") == delivery_id:
+                    # Same delivery_id → return original receipt (idempotent)
+                    return {
+                        "receipt": sidecar["receipt"],
+                        "written_at": sidecar["written_at"],
+                    }
+        except (json.JSONDecodeError, OSError, KeyError):
+            pass  # Corrupted sidecar, proceed with normal write
+
     body = await _read_json_body(request)
     content = json.dumps(body, ensure_ascii=False, indent=2).encode("utf-8")
     target = results_dir / f"{sid}.json"
@@ -615,6 +634,21 @@ async def put_result_json(
         with suppress(OSError):
             if annotated_path.exists():
                 annotated_path.unlink()
+
+    # Write delivery sidecar if delivery_id provided
+    if delivery_id:
+        sidecar_data: Dict[str, str] = {
+            "delivery_id": delivery_id,
+            "receipt": receipt["receipt"],
+            "written_at": receipt["written_at"],
+        }
+        try:
+            sidecar_path.write_text(
+                json.dumps(sidecar_data, ensure_ascii=False),
+                encoding="utf-8",
+            )
+        except OSError:
+            pass  # Non-fatal: result was written, sidecar is best-effort
 
     return receipt
 

@@ -3,6 +3,7 @@
 import hashlib
 import importlib.util
 import time
+import uuid
 from pathlib import Path
 from typing import Any, Dict, List
 
@@ -1135,6 +1136,96 @@ class TestDataJsonEndpoints:
         )
         assert resp.status_code == 400
         assert "json" in resp.json()["detail"].lower()
+
+
+class TestResultWriteIdempotency:
+    """Tests for delivery_id-based idempotency on PUT /data/{aid}/results/{sid}.json."""
+
+    def _setup_results_dir(self, storage_path: Path, aid: str) -> Path:
+        results_dir = storage_path / "_data" / aid / "results"
+        results_dir.mkdir(parents=True, exist_ok=True)
+        return results_dir
+
+    def test_first_write_stores_delivery_sidecar(
+        self, agent_client: Any, tmp_storage_path: Path, auth_headers: dict
+    ) -> None:
+        """First write with delivery_id creates a .delivery sidecar file."""
+        _skip_if_no_fastapi()
+        self._setup_results_dir(tmp_storage_path, "a1")
+        delivery_id = str(uuid.uuid4())
+        resp = agent_client.put(
+            "/data/a1/results/s1.json",
+            json={"score": 5},
+            headers={**auth_headers, "X-AEMS-Delivery-Id": delivery_id},
+        )
+        assert resp.status_code == 200
+        data = resp.json()
+        assert "receipt" in data
+
+        # Verify sidecar exists
+        sidecar = tmp_storage_path / "_data" / "a1" / "results" / "s1.delivery"
+        assert sidecar.exists()
+
+    def test_same_delivery_id_returns_original_receipt(
+        self, agent_client: Any, tmp_storage_path: Path, auth_headers: dict
+    ) -> None:
+        """Repeated PUT with the same delivery_id returns the original receipt unchanged."""
+        _skip_if_no_fastapi()
+        self._setup_results_dir(tmp_storage_path, "a1")
+        delivery_id = str(uuid.uuid4())
+        headers = {**auth_headers, "X-AEMS-Delivery-Id": delivery_id}
+
+        resp1 = agent_client.put("/data/a1/results/s1.json", json={"score": 5}, headers=headers)
+        assert resp1.status_code == 200
+        receipt1 = resp1.json()
+
+        resp2 = agent_client.put("/data/a1/results/s1.json", json={"score": 5}, headers=headers)
+        assert resp2.status_code == 200
+        receipt2 = resp2.json()
+
+        assert receipt1["receipt"] == receipt2["receipt"]
+        assert receipt1["written_at"] == receipt2["written_at"]
+
+    def test_different_delivery_id_writes_new(
+        self, agent_client: Any, tmp_storage_path: Path, auth_headers: dict
+    ) -> None:
+        """A different delivery_id causes a normal write with a new receipt."""
+        _skip_if_no_fastapi()
+        self._setup_results_dir(tmp_storage_path, "a1")
+        id1 = str(uuid.uuid4())
+        id2 = str(uuid.uuid4())
+
+        resp1 = agent_client.put(
+            "/data/a1/results/s1.json",
+            json={"score": 5},
+            headers={**auth_headers, "X-AEMS-Delivery-Id": id1},
+        )
+        assert resp1.status_code == 200
+
+        resp2 = agent_client.put(
+            "/data/a1/results/s1.json",
+            json={"score": 7},
+            headers={**auth_headers, "X-AEMS-Delivery-Id": id2},
+        )
+        assert resp2.status_code == 200
+
+        assert resp2.json()["receipt"] != resp1.json()["receipt"]
+
+    def test_no_delivery_id_header_still_works(
+        self, agent_client: Any, tmp_storage_path: Path, auth_headers: dict
+    ) -> None:
+        """PUT without X-AEMS-Delivery-Id succeeds and creates no sidecar."""
+        _skip_if_no_fastapi()
+        self._setup_results_dir(tmp_storage_path, "a1")
+        resp = agent_client.put(
+            "/data/a1/results/s1.json",
+            json={"score": 5},
+            headers=auth_headers,
+        )
+        assert resp.status_code == 200
+        # No sidecar should be created
+        sidecar = tmp_storage_path / "_data" / "a1" / "results" / "s1.delivery"
+        assert not sidecar.exists()
 
 
 class TestCreateAppLogHandlers:
