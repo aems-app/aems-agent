@@ -10,10 +10,12 @@ import hashlib
 import json
 import logging
 from datetime import datetime, timezone
+from io import BytesIO
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 import fitz  # PyMuPDF
+from PIL import Image
 
 logger = logging.getLogger(__name__)
 
@@ -132,7 +134,11 @@ def generate_bundle(
 
             if needs_image:
                 pixmap = page.get_pixmap(dpi=dpi)
-                img_bytes = pixmap.tobytes("jpeg")
+                png_bytes = pixmap.tobytes("png")
+                image = Image.open(BytesIO(png_bytes))
+                webp_buffer = BytesIO()
+                image.save(webp_buffer, format="WEBP", quality=95)
+                img_bytes = webp_buffer.getvalue()
                 page_data["image_base64"] = base64.b64encode(img_bytes).decode("ascii")
 
             pages.append(page_data)

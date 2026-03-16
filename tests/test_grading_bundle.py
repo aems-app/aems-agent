@@ -1,6 +1,7 @@
 """Tests for grading bundle generation and caching."""
 
 import json
+import base64
 from pathlib import Path
 
 import fitz  # PyMuPDF
@@ -62,6 +63,12 @@ class TestGenerateBundle:
         for page in bundle["pages"]:
             assert "image_base64" in page
             assert len(page["image_base64"]) > 0
+
+    def test_multimodal_images_are_webp(self, sample_pdf: Path) -> None:
+        bundle = generate_bundle(sample_pdf, strategy="multimodal", dpi=72)
+        first_image = base64.b64decode(bundle["pages"][0]["image_base64"])
+        assert first_image.startswith(b"RIFF")
+        assert first_image[8:12] == b"WEBP"
 
     def test_smart_strategy_selective_images(self, sample_pdf: Path) -> None:
         bundle = generate_bundle(sample_pdf, strategy="smart", dpi=72)
