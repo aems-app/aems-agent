@@ -85,7 +85,7 @@ def generate_bundle(
         cached_path = get_cache_path(cache_dir, cache_key, strategy, dpi, max_pages)
         if cached_path.exists():
             try:
-                return json.loads(cached_path.read_text(encoding="utf-8"))
+                return json.loads(cached_path.read_text(encoding="utf-8"))  # type: ignore[no-any-return]
             except (json.JSONDecodeError, OSError):
                 pass  # Cache corrupted, regenerate
 
@@ -105,19 +105,21 @@ def generate_bundle(
             width = rect.width
             height = rect.height
 
-            page_data: Dict[str, Any] = {
-                "page_number": i + 1,
-                "text": text,
-                "width": width,
-                "height": height,
-            }
-
             # Handwriting heuristic: low text density
             page_area = width * height
             is_low_text = len(text.strip()) < _MIN_TEXT_LENGTH
 
             if is_low_text and page_area > 0:
                 handwriting_pages += 1
+
+            page_data: Dict[str, Any] = {
+                "page_number": i + 1,
+                "text": text,
+                "width": width,
+                "height": height,
+                "has_handwriting": is_low_text and page_area > 0,
+                "needs_ocr": is_low_text and page_area > 0,
+            }
 
             # Text quality estimation (text density as proxy)
             text_density = len(text.strip()) / page_area if page_area > 0 else 0.0
@@ -133,11 +135,10 @@ def generate_bundle(
             # text_only: never render images
 
             if needs_image:
-                pixmap = page.get_pixmap(dpi=dpi)
-                png_bytes = pixmap.tobytes("png")
-                image = Image.open(BytesIO(png_bytes))
+                pixmap = page.get_pixmap(dpi=dpi, alpha=False)
+                image = Image.frombytes("RGB", (pixmap.width, pixmap.height), pixmap.samples)
                 webp_buffer = BytesIO()
-                image.save(webp_buffer, format="WEBP", quality=95)
+                image.save(webp_buffer, format="WEBP", quality=95, lossless=True, method=6)
                 img_bytes = webp_buffer.getvalue()
                 page_data["image_base64"] = base64.b64encode(img_bytes).decode("ascii")
 
@@ -172,9 +173,7 @@ def generate_bundle(
         cached_path = get_cache_path(cache_dir, cache_key, strategy, dpi, max_pages)
         try:
             cached_path.parent.mkdir(parents=True, exist_ok=True)
-            cached_path.write_text(
-                json.dumps(bundle, ensure_ascii=False), encoding="utf-8"
-            )
+            cached_path.write_text(json.dumps(bundle, ensure_ascii=False), encoding="utf-8")
         except OSError:
             logger.warning("Failed to write bundle cache at %s", cached_path)
 

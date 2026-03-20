@@ -51,7 +51,14 @@ from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field, field_validator
 
 from . import annotation_crud
-from .config import AGENT_VERSION, API_VERSION, MIN_CLIENT_API_VERSION, AgentConfig, load_config, save_config
+from .config import (
+    AGENT_VERSION,
+    API_VERSION,
+    MIN_CLIENT_API_VERSION,
+    AgentConfig,
+    load_config,
+    save_config,
+)
 from .security import RateLimiter, validate_path_within_storage
 
 logger = logging.getLogger(__name__)
@@ -72,6 +79,7 @@ _auth_token: Optional[str] = None
 _pairing_challenge: Optional[Dict[str, Any]] = None
 _pairing_lock = asyncio.Lock()
 _pairing_rate_limiter = RateLimiter(max_requests=3, window_seconds=60.0)
+
 
 def set_agent_globals(config_dir: Path, auth_token: str) -> None:
     """Set module-level globals used by route handlers."""
@@ -243,13 +251,17 @@ async def get_capabilities() -> Dict[str, Any]:
     return {
         "agent_version": AGENT_VERSION,
         "supported_contract_versions": supported_versions,
-        "features": ["file_storage", "canvas_download", "local_annotation", "annotation_crud", "grading_bundle"],
+        "features": [
+            "file_storage",
+            "canvas_download",
+            "local_annotation",
+            "annotation_crud",
+            "grading_bundle",
+        ],
         "supported_bundle_versions": [1],
         "supported_annotation_contract_versions": supported_versions,
         "encryption_key_id": get_key_id(_config_dir),
-        "public_key_base64": base64.b64encode(
-            load_public_key(_config_dir)
-        ).decode(),
+        "public_key_base64": base64.b64encode(load_public_key(_config_dir)).decode(),
     }
 
 
@@ -433,6 +445,17 @@ async def store_submission(
         with suppress(OSError):
             os.unlink(tmp_path)
         raise
+
+    # Remove stale annotated PDF after source replacement
+    annotated_path = sub_dir / "submission_annotated.pdf"
+    if annotated_path.exists():
+        try:
+            annotated_path.unlink()
+        except OSError:
+            # File may be locked (e.g. on Windows); rename as fallback so
+            # the annotate route won't reuse it (mtime check will also catch this).
+            with suppress(OSError):
+                annotated_path.rename(sub_dir / "submission_annotated.pdf.stale")
 
     return {
         "success": True,
@@ -631,9 +654,13 @@ async def put_result_json(
 
     if previous_content != content:
         annotated_path = _annotated_pdf_path(storage_path, aid, sid)
-        with suppress(OSError):
-            if annotated_path.exists():
+        if annotated_path.exists():
+            try:
                 annotated_path.unlink()
+            except OSError:
+                # File may be locked; rename as fallback so mtime check catches staleness
+                with suppress(OSError):
+                    annotated_path.rename(annotated_path.with_suffix(".pdf.stale"))
 
     # Write delivery sidecar if delivery_id provided
     if delivery_id:
@@ -753,6 +780,7 @@ async def create_grading_bundle(
     cache_dir = Path(storage_path) / "_cache" / "bundles" / aid / sid
 
     from aems_agent.grading_bundle import generate_bundle
+
     bundle = generate_bundle(
         pdf_path,
         strategy=strategy,
@@ -794,9 +822,7 @@ async def annotate_submission(
 
     storage = Path(config.storage_path)
     try:
-        result = generate_annotated_pdf(
-            storage, assignment_id, submission_id, force=force
-        )
+        result = generate_annotated_pdf(storage, assignment_id, submission_id, force=force)
         return result
     except FileNotFoundError as e:
         raise HTTPException(status_code=404, detail=str(e))

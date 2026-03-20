@@ -52,8 +52,7 @@ def _setup_logging(config_dir: Path) -> None:
     # Guard against duplicate handlers when create_app() is called multiple
     # times (tests, hot-reload).  Only add if no RotatingFileHandler exists.
     has_rotating = any(
-        isinstance(h, logging.handlers.RotatingFileHandler)
-        for h in root_logger.handlers
+        isinstance(h, logging.handlers.RotatingFileHandler) for h in root_logger.handlers
     )
     if not has_rotating:
         root_logger.addHandler(handler)
@@ -174,7 +173,14 @@ def create_app(
         allow_origin_regex=_localhost_origin_re,
         allow_credentials=False,
         allow_methods=["GET", "PUT", "POST", "DELETE", "HEAD", "OPTIONS"],
-        allow_headers=["Authorization", "Content-Type", "X-SHA256", "X-AEMS-Client-Version"],
+        allow_headers=[
+            "Authorization",
+            "Content-Type",
+            "X-SHA256",
+            "X-AEMS-Client-Version",
+            "X-AEMS-Annotation-Contract-Version",
+            "X-AEMS-Delivery-Id",
+        ],
         expose_headers=["X-SHA256", "X-AEMS-Agent-Version", "X-AEMS-API-Version"],
     )
 

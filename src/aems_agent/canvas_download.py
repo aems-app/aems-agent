@@ -12,6 +12,7 @@ from __future__ import annotations
 import hashlib
 import logging
 import os
+import re
 import secrets
 import time
 from dataclasses import dataclass, field
@@ -21,6 +22,9 @@ from typing import Any, Callable, Optional
 import httpx
 
 from urllib.parse import urlparse
+
+# Safe path segment pattern (matches _validate_path_segment in routes.py)
+_SAFE_SEGMENT_RE = re.compile(r"^[a-zA-Z0-9_\-]+$")
 
 logger = logging.getLogger(__name__)
 
@@ -68,9 +72,7 @@ def validate_manifest(
 
     manifest_version = manifest.get("manifest_version")
     if manifest_version != SUPPORTED_MANIFEST_VERSION:
-        raise ManifestValidationError(
-            f"Unsupported manifest version: {manifest_version!r}"
-        )
+        raise ManifestValidationError(f"Unsupported manifest version: {manifest_version!r}")
 
     # Check HTTPS
     url = manifest.get("canvas_base_url", "")
@@ -84,9 +86,7 @@ def validate_manifest(
     if not host_allowed and hostname.endswith(".instructure.com"):
         host_allowed = True
     if not host_allowed:
-        raise ManifestValidationError(
-            f"Host {hostname!r} not in allowlist: {allowed_hosts}"
-        )
+        raise ManifestValidationError(f"Host {hostname!r} not in allowlist: {allowed_hosts}")
 
     # Check audience binding
     if manifest.get("audience_key_id") != agent_key_id:
@@ -131,15 +131,56 @@ async def download_submissions(
     token = manifest["canvas_token"]
     aid = manifest["assignment_id"]
 
+    # Validate assignment_id path segment
+    aid_str = str(aid)
+    if not _SAFE_SEGMENT_RE.match(aid_str):
+        raise ValueError(f"Invalid assignment_id path segment: {aid_str!r}")
+
     for sub in manifest["submissions"]:
         sid = sub["submission_id"]
-        target_dir = storage_path / str(aid) / str(sid)
+
+        # Validate submission_id path segment
+        sid_str = str(sid)
+        if not _SAFE_SEGMENT_RE.match(sid_str):
+            raise ValueError(f"Invalid submission_id path segment: {sid_str!r}")
+
+        target_dir = storage_path / aid_str / sid_str
+        # Verify resolved path stays within storage_path
+        resolved_target = target_dir.resolve()
+        resolved_storage = storage_path.resolve()
+        if not resolved_target.is_relative_to(resolved_storage):
+            raise ValueError(f"Path traversal detected: {target_dir} escapes {storage_path}")
+
         target_file = target_dir / "submission.pdf"
 
         # Idempotency: skip if file exists and size matches (or no expected_size)
         if target_file.exists():
             expected_size = sub.get("expected_size")
-            if expected_size is None or target_file.stat().st_size == expected_size:
+            if expected_size is not None and target_file.stat().st_size != expected_size:
+                pass  # Size mismatch — fall through to re-download
+            elif expected_size is None:
+                # No expected_size: validate PDF magic bytes to catch corrupt files
+                try:
+                    with open(target_file, "rb") as f:
+                        magic = f.read(5)
+                    if magic != b"%PDF-":
+                        logger.warning(
+                            "Existing file %s is not a valid PDF (magic=%r), re-downloading",
+                            target_file,
+                            magic,
+                        )
+                        pass  # Not a valid PDF — fall through to re-download
+                    else:
+                        sha = hashlib.sha256(target_file.read_bytes()).hexdigest()
+                        result = SubmissionResult(sid, "skipped", sha256=sha)
+                        results.append(result)
+                        if progress_callback is not None:
+                            progress_callback(result)
+                        continue
+                except OSError:
+                    pass  # Can't read file — fall through to re-download
+            else:
+                # Size matches expected_size — skip
                 sha = hashlib.sha256(target_file.read_bytes()).hexdigest()
                 result = SubmissionResult(sid, "skipped", sha256=sha)
                 results.append(result)
@@ -172,6 +213,18 @@ async def download_submissions(
             tmp = target_file.with_suffix(".tmp")
             tmp.write_bytes(content)
             os.replace(str(tmp), str(target_file))
+
+            # Remove stale annotated PDF after source replacement
+            annotated_path = target_dir / "submission_annotated.pdf"
+            if annotated_path.exists():
+                try:
+                    annotated_path.unlink()
+                except OSError:
+                    # File may be locked; rename as fallback so mtime check catches staleness
+                    try:
+                        annotated_path.rename(target_dir / "submission_annotated.pdf.stale")
+                    except OSError:
+                        pass
 
             sha = hashlib.sha256(content).hexdigest()
             result = SubmissionResult(sid, "downloaded", sha256=sha)
@@ -274,13 +327,16 @@ async def run_download_job(
     job.status = "running"
 
     try:
+
         def record_result(result: SubmissionResult) -> None:
-            job.per_submission.append({
-                "submission_id": result.submission_id,
-                "status": result.status,
-                "sha256": result.sha256,
-                "error": result.error,
-            })
+            job.per_submission.append(
+                {
+                    "submission_id": result.submission_id,
+                    "status": result.status,
+                    "sha256": result.sha256,
+                    "error": result.error,
+                }
+            )
             if result.status == "downloaded":
                 job.downloaded += 1
             elif result.status == "skipped":
@@ -292,6 +348,7 @@ async def run_download_job(
         if owns_client:
             http_client = httpx.AsyncClient()
 
+        assert http_client is not None  # narrowing for mypy
         try:
             await download_submissions(
                 manifest=manifest,
@@ -308,9 +365,11 @@ async def run_download_job(
     except Exception as e:
         logger.error("Download job %s failed: %s", job_id, e, exc_info=True)
         job.status = "failed"
-        job.per_submission.append({
-            "submission_id": 0,
-            "status": "failed",
-            "sha256": "",
-            "error": str(e),
-        })
+        job.per_submission.append(
+            {
+                "submission_id": 0,
+                "status": "failed",
+                "sha256": "",
+                "error": str(e),
+            }
+        )

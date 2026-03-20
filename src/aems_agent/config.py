@@ -89,6 +89,7 @@ class AgentConfig(BaseModel):
         default_factory=list,
         description="Extra Canvas hostnames allowed in download manifests (for self-hosted Canvas instances)",
     )
+
     @field_validator("storage_path")
     @classmethod
     def validate_storage_path(cls, v: Optional[str]) -> Optional[str]:
@@ -199,5 +200,3 @@ def get_auth_token(config_dir: Optional[Path] = None) -> Optional[str]:
         if token:
             return token
     return None
-
-

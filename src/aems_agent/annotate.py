@@ -36,9 +36,7 @@ def generate_annotated_pdf(
         ContractValidationError: If contract version is unsupported.
     """
     # Locate files
-    results_path = (
-        storage_path / "_data" / assignment_id / "results" / f"{submission_id}.json"
-    )
+    results_path = storage_path / "_data" / assignment_id / "results" / f"{submission_id}.json"
     if not results_path.exists():
         raise FileNotFoundError(f"Results JSON not found: {results_path}")
 
@@ -46,19 +44,23 @@ def generate_annotated_pdf(
     if not pdf_path.exists():
         raise FileNotFoundError(f"Submission PDF not found: {pdf_path}")
 
-    output_path = (
-        storage_path / assignment_id / submission_id / "submission_annotated.pdf"
-    )
+    output_path = storage_path / assignment_id / submission_id / "submission_annotated.pdf"
 
-    # Check idempotency
+    # Check idempotency — reuse only if annotated PDF is newer than both inputs.
+    # If deletion failed after a source update (e.g. file locked on Windows),
+    # the mtime check ensures we regenerate rather than serve stale content.
     if output_path.exists() and not force:
-        return {
-            "status": "ok",
-            "annotation_count": None,
-            "output_path": str(output_path.relative_to(storage_path)),
-            "contract_version": CURRENT_CONTRACT_VERSION,
-            "existing": True,
-        }
+        annotated_mtime = output_path.stat().st_mtime
+        source_mtime = pdf_path.stat().st_mtime
+        results_mtime = results_path.stat().st_mtime
+        if annotated_mtime > source_mtime and annotated_mtime > results_mtime:
+            return {
+                "status": "ok",
+                "annotation_count": None,
+                "output_path": str(output_path.relative_to(storage_path)),
+                "contract_version": CURRENT_CONTRACT_VERSION,
+                "existing": True,
+            }
 
     # Load and validate results
     results = json.loads(results_path.read_text(encoding="utf-8"))
@@ -83,9 +85,7 @@ def generate_annotated_pdf(
         count = annotator.add_annotations(annotations)
         annotator.save(output_path)
 
-    logger.info(
-        "Generated annotated PDF: %s (%d annotations)", output_path, count
-    )
+    logger.info("Generated annotated PDF: %s (%d annotations)", output_path, count)
 
     return {
         "status": "ok",

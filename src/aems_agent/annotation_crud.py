@@ -244,7 +244,7 @@ def serialize_annotation_entry(annotation: Optional[Dict[str, Any]]) -> Optional
     original_source = serialized.get("original_source")
     serialized["source"] = source
     serialized["original_source"] = original_source
-    serialized["can_revert_to_ai"] = (source == "HUMAN" and original_source == "AI")
+    serialized["can_revert_to_ai"] = source == "HUMAN" and original_source == "AI"
 
     # Verdict flag
     serialized["is_verdict"] = bool(serialized.get("is_verdict", False))
@@ -395,11 +395,9 @@ def list_annotations(pdf_path: Path) -> Dict[str, Any]:
             for page_idx in range(annotator.doc.page_count):
                 page_annotations = annotator.get_annotations_on_page(page_idx)
                 if page_annotations:
-                    serialized = [
-                        serialize_annotation_entry(ann) for ann in page_annotations
-                    ]
+                    raw = [serialize_annotation_entry(ann) for ann in page_annotations]
                     # Filter out None entries
-                    serialized = [s for s in serialized if s is not None]
+                    serialized: list[Dict[str, Any]] = [s for s in raw if s is not None]
                     if serialized:
                         annotations_by_page[str(page_idx)] = serialized
 
@@ -543,9 +541,7 @@ def add_annotation(pdf_path: Path, payload: Dict[str, Any]) -> Dict[str, Any]:
 
             # Find the newly created annotation
             page_annotations = annotator.get_annotations_on_page(page_index)
-            created = select_annotation_entry(
-                page_annotations, stable_id=annotation.id, xref=None
-            )
+            created = select_annotation_entry(page_annotations, stable_id=annotation.id, xref=None)
             created_serialized = serialize_annotation_entry(created)
 
             if not created_serialized:
@@ -631,23 +627,39 @@ def update_annotation(
         with PDFAnnotator(pdf_path) as annotator:
             # Grader name fallback: payload > existing annotation author > "Teacher"
             if not grader_name:
-                existing = annotator.find_annotation_by_id(
-                    canonical_identifier
-                ) if stable_id else None
+                existing = (
+                    annotator.find_annotation_by_id(canonical_identifier) if stable_id else None
+                )
                 if not existing and xref_value is not None:
                     existing = annotator.find_annotation_by_xref(xref_value)
                 if existing:
                     page_idx_existing, _annot_obj = existing
                     page_anns = annotator.get_annotations_on_page(page_idx_existing)
-                    found = select_annotation_entry(
-                        page_anns, stable_id=stable_id, xref=xref_value
-                    )
+                    found = select_annotation_entry(page_anns, stable_id=stable_id, xref=xref_value)
                     if found:
                         grader_name = found.get("grader_name") or None
                 if not grader_name:
                     grader_name = "Teacher"
 
-            rect_tuple = tuple(new_rect) if new_rect is not None else None
+            # Convert rect from PDF-space (bottom-left origin) to
+            # PyMuPDF-space (top-left origin), same as add_annotation does.
+            rect_tuple = None
+            if new_rect is not None:
+                target_pg = new_page_index
+                if target_pg is None:
+                    found = (
+                        annotator.find_annotation_by_id(canonical_identifier)
+                        if stable_id
+                        else None
+                    )
+                    if not found and xref_value is not None:
+                        found = annotator.find_annotation_by_xref(xref_value)
+                    target_pg = found[0] if found else 0
+                page_obj = annotator.doc[target_pg]
+                page_height = page_obj.rect.height or 792.0
+                rect_tuple = tuple(
+                    _pdf_rect_to_pymupdf(list(new_rect), page_height)
+                )
 
             update_result = annotator.update_annotation(
                 annotation_identifier=canonical_identifier,
