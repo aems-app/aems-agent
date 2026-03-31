@@ -4,7 +4,8 @@ FastAPI router with all AEMS Local Bridge Agent endpoints.
 Endpoint summary:
     GET  /status                                        - Alive check (no auth)
     GET  /capabilities                                  - Discovery / public key (no auth)
-    GET  /health                                        - Detailed health (auth)
+    GET  /info                                          - Version, storage, paired origins (no auth)
+    GET  /health                                        - Detailed health with disk info (no auth)
     GET  /config/path                                   - Get storage path (auth)
     PUT  /config/path                                   - Set storage path (auth)
     GET  /files/{assignment_id}                         - List submissions (auth)
@@ -265,12 +266,28 @@ async def get_capabilities() -> Dict[str, Any]:
     }
 
 
+@router.get("/info")
+async def info() -> Dict[str, Any]:
+    """Public info endpoint — version, storage path, paired origins.
+
+    Matches the runbook expectation for ``GET /info``.
+    """
+    config = _get_config()
+    return {
+        "version": AGENT_VERSION,
+        "api_version": API_VERSION,
+        "storage_path": config.storage_path,
+        "paired_origins": config.paired_origins,
+    }
+
+
 @router.get("/health")
-async def health(
-    _token: str = Depends(_verify_token),
-    _rl: None = Depends(_check_rate_limit),
-) -> Dict[str, Any]:
-    """Detailed health check with disk space and storage info."""
+async def health() -> Dict[str, Any]:
+    """Health check - no authentication required.
+
+    Standard health-check endpoint used by load balancers, monitoring, and
+    the runbook smoke-test.  Returns storage status and disk metrics.
+    """
     config = _get_config()
     result: Dict[str, Any] = {
         "status": "ok",

@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "aems-agent"
-version = "0.3.0"
+version = "0.3.1"
 description = "AEMS Local Bridge Agent — local filesystem access for exam PDFs"
 authors = [{name = "AEMS Team"}]
 readme = "README.md"
@@ -19,7 +19,7 @@ dependencies = [
     "pydantic>=2.0.0",
     "pynacl>=1.5.0",
     "pillow>=10.0.0",
-    "aems-pdf-annotator @ file:///D:/Temp/Artem/aems-pdf-annotator",
+    "aems-pdf-annotator>=0.1.0",
     "pymupdf>=1.25.0",
 ]
 
