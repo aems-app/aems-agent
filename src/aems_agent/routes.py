@@ -79,7 +79,7 @@ _auth_token: Optional[str] = None
 # Pairing state (in-memory, single active challenge)
 _pairing_challenge: Optional[Dict[str, Any]] = None
 _pairing_lock = asyncio.Lock()
-_pairing_rate_limiter = RateLimiter(max_requests=3, window_seconds=60.0)
+_pairing_rate_limiter = RateLimiter(max_requests=6, window_seconds=60.0)
 
 
 def set_agent_globals(config_dir: Path, auth_token: str) -> None:
