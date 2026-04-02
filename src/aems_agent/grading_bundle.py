@@ -25,6 +25,35 @@ _MIN_TEXT_LENGTH = 50
 # Below this threshold (chars per page area unit), page is considered "low text"
 _LOW_TEXT_DENSITY_THRESHOLD = 0.0001
 
+# Tokens that indicate mathematical/formula content on a page.
+_MATH_TOKENS = [
+    "\\frac", "\\sum", "\\int", "\\sqrt", "\\partial", "\\infty",
+    "\\alpha", "\\beta", "\\gamma", "\\delta", "\\epsilon", "\\sigma",
+    "\\theta", "\\lambda", "\\mu", "\\phi", "\\omega", "\\pi",
+    "≥", "≤", "≠", "≈", "∑", "∫", "√", "∂", "∞", "→", "⇒",
+]
+_MATH_OPERATORS = set("=+-/^×·∙")
+
+
+def _page_has_formulas(text: str) -> bool:
+    """Return True if the page text looks formula-heavy (matches server logic)."""
+    math_score = 0
+    lower = text.lower()
+    for tok in _MATH_TOKENS:
+        math_score += lower.count(tok.lower())
+    for ch in text:
+        if ch in _MATH_OPERATORS:
+            math_score += 1
+    return math_score >= 10
+
+
+def _page_has_images(page) -> bool:
+    """Return True if the PDF page contains embedded images or drawings."""
+    try:
+        return len(page.get_images(full=False)) > 0 or len(page.get_drawings()) > 0
+    except Exception:
+        return False
+
 
 def get_cache_key(
     pdf_path: Path,
@@ -123,6 +152,10 @@ def generate_bundle(
             if is_low_text and page_area > 0:
                 handwriting_pages += 1
 
+            # Per-page visual content detection (for smart strategy)
+            has_figures = _page_has_images(page)
+            has_formulas = _page_has_formulas(text)
+
             page_data: Dict[str, Any] = {
                 "page_number": i + 1,
                 "text": text,
@@ -130,6 +163,8 @@ def generate_bundle(
                 "height": height,
                 "has_handwriting": is_low_text and page_area > 0,
                 "needs_ocr": is_low_text and page_area > 0,
+                "has_figures": has_figures,
+                "has_formulas": has_formulas,
             }
 
             # Text quality estimation (text density as proxy)
@@ -137,17 +172,21 @@ def generate_bundle(
             page_quality = min(1.0, text_density / 0.001) if page_area > 0 else 0.0
             total_text_quality += page_quality
 
-            # Image rendering based on strategy
+            # Image rendering based on strategy.
+            # Matches server-side logic in processing.py:needs_vision_refinement:
+            #   - handwritten docs: all pages get images (garbled OCR)
+            #   - printed docs: pages with embedded figures or formulas get images
+            #     (text extraction misses diagrams and math notation)
             needs_image = False
             if strategy == "multimodal":
                 needs_image = True
             elif strategy == "smart":
-                # Render image when text extraction is insufficient for grading:
-                # - very little text extracted (likely image-heavy / handwritten)
-                # - OR any page in the document has handwriting detected
-                #   (handwritten OCR produces high char-count but garbled text
-                #    that is useless for grading — all pages need images)
-                needs_image = is_low_text or doc_has_handwriting
+                needs_image = (
+                    is_low_text              # very little extractable text
+                    or doc_has_handwriting    # any page is handwritten → all need images
+                    or has_figures            # page has embedded images / diagrams
+                    or has_formulas           # page has math notation
+                )
             # text_only: never render images
 
             if needs_image:
