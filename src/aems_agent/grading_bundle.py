@@ -98,6 +98,17 @@ def generate_bundle(
         handwriting_pages = 0
         total_text_quality = 0.0
 
+        # Pre-scan: detect if any page has handwriting (low extractable text).
+        # This must run before the main loop so the "smart" strategy can
+        # decide to include images for ALL pages of handwritten documents.
+        doc_has_handwriting = False
+        if strategy == "smart":
+            for j in range(pages_to_process):
+                pg = doc[j]
+                if len(pg.get_text("text").strip()) < _MIN_TEXT_LENGTH and pg.rect.width * pg.rect.height > 0:
+                    doc_has_handwriting = True
+                    break
+
         for i in range(pages_to_process):
             page = doc[i]
             text = page.get_text("text")
@@ -131,7 +142,12 @@ def generate_bundle(
             if strategy == "multimodal":
                 needs_image = True
             elif strategy == "smart":
-                needs_image = is_low_text  # Render image for low-text pages
+                # Render image when text extraction is insufficient for grading:
+                # - very little text extracted (likely image-heavy / handwritten)
+                # - OR any page in the document has handwriting detected
+                #   (handwritten OCR produces high char-count but garbled text
+                #    that is useless for grading — all pages need images)
+                needs_image = is_low_text or doc_has_handwriting
             # text_only: never render images
 
             if needs_image:
