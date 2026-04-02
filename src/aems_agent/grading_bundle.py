@@ -156,13 +156,33 @@ def generate_bundle(
             has_figures = _page_has_images(page)
             has_formulas = _page_has_formulas(text)
 
+            # A page "needs vision" when we plan to include an image for it.
+            # The server's bundle_adapter uses has_handwriting / needs_ocr to
+            # decide whether pre_rendered_images apply to this page, so these
+            # flags must be True whenever we render an image.
+            page_needs_vision = (
+                is_low_text
+                or doc_has_handwriting
+                or has_figures
+                or has_formulas
+            ) if strategy == "smart" else (strategy == "multimodal")
+
+            # For handwritten pages, PyMuPDF's get_text() produces garbled
+            # characters that confuse the LLM (it tries to interpret garbage
+            # text instead of looking at the image). Clear the text for pages
+            # that will be rendered as images in a handwritten document so the
+            # LLM relies on visual content only.
+            effective_text = text
+            if page_needs_vision and doc_has_handwriting and strategy == "smart":
+                effective_text = ""
+
             page_data: Dict[str, Any] = {
                 "page_number": i + 1,
-                "text": text,
+                "text": effective_text,
                 "width": width,
                 "height": height,
-                "has_handwriting": is_low_text and page_area > 0,
-                "needs_ocr": is_low_text and page_area > 0,
+                "has_handwriting": page_needs_vision,
+                "needs_ocr": page_needs_vision,
                 "has_figures": has_figures,
                 "has_formulas": has_formulas,
             }
