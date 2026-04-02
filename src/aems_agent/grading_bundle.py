@@ -140,7 +140,12 @@ def generate_bundle(
                 webp_buffer = BytesIO()
                 image.save(webp_buffer, format="WEBP", quality=95, lossless=True, method=6)
                 img_bytes = webp_buffer.getvalue()
-                page_data["image_base64"] = base64.b64encode(img_bytes).decode("ascii")
+                encoded_image = base64.b64encode(img_bytes).decode("ascii")
+                page_data["image_base64"] = encoded_image
+                # Compatibility alias for consumers that expect a plural image list.
+                page_data["images"] = [encoded_image]
+            else:
+                page_data["images"] = []
 
             pages.append(page_data)
 

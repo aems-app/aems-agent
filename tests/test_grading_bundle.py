@@ -57,12 +57,14 @@ class TestGenerateBundle:
         bundle = generate_bundle(sample_pdf, strategy="text_only", dpi=150)
         for page in bundle["pages"]:
             assert "image_base64" not in page
+            assert page["images"] == []
 
     def test_multimodal_all_images(self, sample_pdf: Path) -> None:
         bundle = generate_bundle(sample_pdf, strategy="multimodal", dpi=72)
         for page in bundle["pages"]:
             assert "image_base64" in page
             assert len(page["image_base64"]) > 0
+            assert page["images"] == [page["image_base64"]]
 
     def test_multimodal_images_are_webp(self, sample_pdf: Path) -> None:
         bundle = generate_bundle(sample_pdf, strategy="multimodal", dpi=72)
