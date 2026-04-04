@@ -78,7 +78,7 @@ class AgentConfig(BaseModel):
         description="Host to bind to (default localhost only)",
     )
     allowed_origins: List[str] = Field(
-        default_factory=lambda: ["http://127.0.0.1:8080", "http://localhost:8080"],
+        default_factory=lambda: ["http://127.0.0.1:8080", "http://localhost:8080", "https://api.aems.app"],
         description="CORS allowed origins",
     )
     paired_origins: List[str] = Field(
