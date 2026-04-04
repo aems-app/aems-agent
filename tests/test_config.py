@@ -88,6 +88,7 @@ class TestAgentConfig:
         assert config.port == 61234
         assert config.host == "127.0.0.1"
         assert len(config.allowed_origins) > 0
+        assert "https://api.aems.app" in config.allowed_origins
 
     def test_custom_values(self) -> None:
         config = AgentConfig(
@@ -174,5 +175,4 @@ class TestAuthToken:
 
         token = ensure_auth_token(config_dir)
         assert get_auth_token(config_dir) == token
-
 
