@@ -808,6 +808,23 @@ class TestCORSDynamicOrigins:
         # CORSMiddleware should match via allow_origin_regex
         assert resp.headers.get("access-control-allow-origin") == origin
 
+    def test_private_network_preflight_is_allowed_for_localhost_origin(self, agent_client: Any) -> None:
+        """Loopback origins must pass Private Network Access preflights."""
+        _skip_if_no_fastapi()
+        origin = "https://127.0.0.1:8080"
+        resp = agent_client.options(
+            "/files/test-assignment/test-submission",
+            headers={
+                "Origin": origin,
+                "Access-Control-Request-Method": "PUT",
+                "Access-Control-Request-Headers": "authorization,content-type",
+                "Access-Control-Request-Private-Network": "true",
+            },
+        )
+        assert resp.status_code == 200
+        assert resp.headers.get("access-control-allow-origin") == origin
+        assert resp.headers.get("access-control-allow-private-network") == "true"
+
 
 # ---------------------------------------------------------------------------
 # Test Gap 2: _normalize_origin edge cases

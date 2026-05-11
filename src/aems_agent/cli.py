@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+
 """
 CLI entry point for the AEMS Local Bridge Agent.
 
@@ -26,10 +28,31 @@ from .config import (
     save_config,
 )
 
+def _version_callback(value: bool) -> None:
+    """Print the agent version and exit 0 when --version is passed."""
+    if value:
+        typer.echo(f"aems-agent {AGENT_VERSION}")
+        raise typer.Exit(0)
+
+
 app = typer.Typer(
     name="aems-agent",
     help="AEMS Local Bridge Agent - local filesystem access for exam PDFs",
 )
+
+
+@app.callback()
+def _root(
+    version: Optional[bool] = typer.Option(
+        None,
+        "--version",
+        callback=_version_callback,
+        is_eager=True,
+        help="Print the agent version and exit.",
+    ),
+) -> None:
+    """Root callback wiring the --version flag."""
+    return None
 
 
 def _setup_signal_handlers() -> None:

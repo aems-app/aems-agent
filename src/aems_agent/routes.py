@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+
 """
 FastAPI router with all AEMS Local Bridge Agent endpoints.
 

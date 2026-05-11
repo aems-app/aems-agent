@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+
 """Grading bundle generation for local-mode grading.
 
 Reads a submission PDF, extracts text and optionally renders page images,

@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+
 """
 FastAPI application assembly for the AEMS Local Bridge Agent.
 
@@ -172,6 +174,7 @@ def create_app(
         allow_origins=all_origins,
         allow_origin_regex=_localhost_origin_re,
         allow_credentials=False,
+        allow_private_network=True,
         allow_methods=["GET", "PUT", "POST", "DELETE", "HEAD", "OPTIONS"],
         allow_headers=[
             "Authorization",

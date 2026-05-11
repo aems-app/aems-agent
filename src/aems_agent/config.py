@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+
 """
 Platform-aware configuration management for the AEMS Local Bridge Agent.
 

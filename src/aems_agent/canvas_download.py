@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+
 """Canvas download logic: manifest validation, idempotent download, job management.
 
 Separated from routes.py to keep download logic testable without FastAPI.

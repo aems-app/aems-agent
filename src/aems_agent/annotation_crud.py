@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+
 """Annotation CRUD operations for the AEMS local agent.
 
 Wraps the shared ``aems_pdf_annotator`` package with input validation,

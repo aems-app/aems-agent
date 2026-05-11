@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+
 """
 Agent encryption keypair management (X25519 + XSalsa20-Poly1305 via NaCl).
 

@@ -1,28 +1,43 @@
 # AEMS Local Bridge Agent
 
-A lightweight companion service that runs on `localhost` and provides REST API access to the local filesystem, enabling the [AEMS](https://github.com/artkula/aems) web app to read/write exam PDFs to a user-chosen folder.
+> **As of v0.3.2 (2026-05-11), this package is licensed under AGPL-3.0-or-later (previously MIT).** The agent links [PyMuPDF](https://github.com/pymupdf/PyMuPDF) in-process via [`aems-pdf-annotator`](https://github.com/aems-app/aems-pdf-annotator), and AGPL applies to the combined work. See [LICENSE](LICENSE) for the full text.
+
+A lightweight companion service that runs on `localhost` and provides REST API access to the local filesystem, enabling the [AEMS](https://aems.app) hosted app to read/write exam PDFs to a user-chosen folder without ever uploading source PDFs to the server.
+
+## What it does
+
+- Runs as a local service on `127.0.0.1:61234` (default).
+- Exposes an authenticated REST API the AEMS web app uses to read source PDFs and write annotated PDFs from your local storage folder.
+- Optional system-tray icon so it's visible while running.
+- Optional offline grading bundle support for fully-local workflows.
+- Never sends PDF content out unless the user explicitly attaches a Canvas / offline workflow in the hosted app.
 
 ## Installation
 
-### pip (recommended for development)
+### Binary installers (recommended for end users)
+
+Pre-built installers — no Python needed — are on the [Releases page](https://github.com/aems-app/aems-agent/releases/latest).
+
+| Platform | File | Notes |
+|----------|------|-------|
+| Windows | `aems-agent-setup.exe` | Installs to `%LOCALAPPDATA%\AEMS Agent` |
+| macOS   | `AEMS-Agent.dmg`       | Drag to Applications |
+| Linux   | `aems-agent-linux.tar.gz` | Extract and run `./aems-agent run` |
+
+### pip (for developers)
 
 ```bash
 pip install aems-agent
 ```
 
-### Binary installers
-
-Download pre-built installers from [Releases](https://github.com/artkula/aems-agent/releases):
-
-| Platform | File | Notes |
-|----------|------|-------|
-| Windows | `aems-agent-setup.exe` | Installs to `%LOCALAPPDATA%\AEMS Agent` |
-| macOS | `AEMS-Agent.dmg` | Drag to Applications |
-| Linux | `aems-agent-linux.tar.gz` | Extract and run `./aems-agent run` |
+Requires Python 3.10+.
 
 ## Usage
 
 ```bash
+# Print version and exit
+aems-agent --version
+
 # Start the agent (default: http://127.0.0.1:61234)
 aems-agent run
 
@@ -32,102 +47,27 @@ aems-agent run --tray
 # Custom port/host
 aems-agent run --port 9000 --host 0.0.0.0
 
-# Enforce runtime license policy
-aems-agent run --license-policy warn
-aems-agent run --license-policy soft-block
-aems-agent run --license-policy hard-block
-
-# Show auth token
+# Show auth token (the hosted app pairs against this token)
 aems-agent token
 
-# Set exam storage directory
-aems-agent set-path /path/to/exams
+# Set storage path
+aems-agent set-path /path/to/exam/folder
 
-# Show config directory location
+# Show config directory
 aems-agent config-dir
-
-# Store a license JWT token
-aems-agent license-store "<jwt-token>"
-
-# Validate token signature + claims + heartbeat
-aems-agent license-check \
-  --license-url https://license.domain.com \
-  --issuer https://license.domain.com \
-  --audience aems-agent
 ```
 
-## Configuration
-
-Config files are stored in a platform-specific directory:
-
-| Platform | Path |
-|----------|------|
-| Windows | `%APPDATA%\AEMS\agent\` |
-| macOS | `~/.config/aems/agent/` |
-| Linux | `~/.config/aems/agent/` (or `$XDG_CONFIG_HOME/aems/agent/`) |
-
-Files:
-- `config.json` - storage path, port, allowed origins, license settings
-- `auth_token` - bearer token for API authentication
-- `license.jwt` - stored license token
-- `agent.log` - rotating log file
-
-Runtime license policy modes:
-- `warn`: agent starts and logs validation failures.
-- `soft-block`: agent starts in limited mode when license is invalid. Write operations (`PUT/DELETE /files/*`, `PUT /config/path`) are blocked until license becomes valid again.
-- `hard-block`: startup fails and exits non-zero when license is invalid/revoked/grace-expired; runtime checks also terminate the process non-zero on hard-block failures.
-
-## API Endpoints
-
-| Method | Path | Auth | Description |
-|--------|------|------|-------------|
-| GET | `/status` | No | Alive check |
-| GET | `/health` | Yes | Detailed health with disk info |
-| GET/PUT | `/config/path` | Yes | Get/set storage path |
-| GET | `/files/{assignment_id}` | Yes | List submissions |
-| GET/PUT/DELETE | `/files/{aid}/{sid}` | Yes | Manage submission PDFs |
-| GET/PUT | `/files/{aid}/{sid}/annotated` | Yes | Manage annotated PDFs |
-| POST | `/pair/initiate` | No | Start browser pairing |
-| POST | `/pair/complete` | No | Complete pairing |
-
-## Development
-
-```bash
-git clone https://github.com/artkula/aems-agent.git
-cd aems-agent
-python -m pip install -e ".[dev]"
-python -m pytest -v
-```
-
-## Release Trust and Verification
-
-Release pipeline:
-- `.github/workflows/build.yml`
-- Windows tagged releases are Authenticode-signed.
-- macOS tagged releases are code-signed, notarized, and stapled.
-- `release-manifest.json` and `sha256sums.txt` are signed with cosign as supplemental integrity proof.
-
-Verification examples:
-
-Windows:
-```powershell
-Get-AuthenticodeSignature .\aems-agent-setup.exe | Format-List
-```
-
-macOS:
-```bash
-codesign --verify --deep --strict --verbose=2 "AEMS Agent.app"
-spctl --assess --type open --context context:primary-signature --verbose=4 "AEMS-Agent.dmg"
-```
-
-Cosign manifest verification:
-```bash
-cosign verify-blob \
-  --certificate release-manifest.pem \
-  --signature release-manifest.sig \
-  release-manifest.json
-```
+After `aems-agent run`, open AEMS in your browser, go to **Settings → Storage**, and pair the agent.
 
 ## License
 
-MIT
+AGPL-3.0-or-later. See [LICENSE](LICENSE).
+
+**Relicense note (v0.3.2, 2026-05-11):** Versions ≤ 0.3.1 were licensed under MIT. From v0.3.2 the agent is AGPL-3.0-or-later because it links PyMuPDF (AGPL-3.0) in-process via `aems-pdf-annotator`. The MIT licence that previously applied to forks of v0.3.1 and earlier remains in effect for those versions.
+
+## Links
+
+- Homepage: [https://aems.app](https://aems.app)
+- Source: [https://github.com/aems-app/aems-agent](https://github.com/aems-app/aems-agent)
+- Issues: [https://github.com/aems-app/aems-agent/issues](https://github.com/aems-app/aems-agent/issues)
+- Annotation engine: [aems-pdf-annotator](https://github.com/aems-app/aems-pdf-annotator)

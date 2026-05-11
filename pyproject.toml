@@ -4,12 +4,24 @@ build-backend = "hatchling.build"
 
 [project]
 name = "aems-agent"
-version = "0.3.1"
+version = "0.3.2"
 description = "AEMS Local Bridge Agent — local filesystem access for exam PDFs"
-authors = [{name = "AEMS Team"}]
+authors = [{name = "AEMS Team", email = "contact@aems.app"}]
 readme = "README.md"
 requires-python = ">=3.10"
-license = {text = "MIT"}
+license = {text = "AGPL-3.0-or-later"}
+keywords = ["aems", "grading", "agent", "pdf", "local-bridge"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Education",
+    "License :: OSI Approved :: GNU Affero General Public License v3 or later (AGPLv3+)",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Education",
+]
 
 dependencies = [
     "fastapi>=0.104.0",
@@ -19,9 +31,15 @@ dependencies = [
     "pydantic>=2.0.0",
     "pynacl>=1.5.0",
     "pillow>=10.0.0",
-    "aems-pdf-annotator>=0.1.0",
+    "aems-pdf-annotator>=0.2.0,<0.3.0",
     "pymupdf>=1.25.0",
 ]
+
+[project.urls]
+Homepage = "https://aems.app"
+Repository = "https://github.com/aems-app/aems-agent"
+Issues = "https://github.com/aems-app/aems-agent/issues"
+Changelog = "https://github.com/aems-app/aems-agent/blob/main/CHANGELOG.md"
 
 [project.optional-dependencies]
 tray = ["pystray>=0.19.0", "pillow>=10.0.0"]
