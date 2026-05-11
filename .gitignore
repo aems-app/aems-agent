@@ -40,3 +40,6 @@ htmlcov/
 # Config (user-specific)
 config/
 .pytest-temp/
+
+# Tooling output (knowledge-graph extractor, leaks local workspace path)
+graphify-out/

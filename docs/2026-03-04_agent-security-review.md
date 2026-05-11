@@ -69,7 +69,7 @@ The current mitigations (256-bit challenge entropy, 120-second expiry, 3 req/min
 
 **What:** The `create_file_provider("local", ...)` factory and `LocalAgentFileProvider` HTTP client exist in the main AEMS codebase (`file_provider.py`) and are tested, but no production grading endpoint calls them. The storage mode resolves to `"local"` correctly, but the result is never consumed.
 
-**Why deferred:** This is in the main AEMS codebase (`D:\Temp\Artem\aems\`), not the agent repo. It requires changes to the grading workflow files in `src/aems/web/api/v1/canvas/` to route through the file provider abstraction. Out of scope for this agent-focused review.
+**Why deferred:** This is in the main AEMS server codebase, not the agent repo. It requires changes to the grading workflow files in `src/aems/web/api/v1/canvas/` to route through the file provider abstraction. Out of scope for this agent-focused review.
 
 ### I3 — CORS `allow_origin_regex` matches any localhost port
 
