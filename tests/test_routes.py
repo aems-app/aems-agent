@@ -1,6 +1,7 @@
 """Tests for agent REST API endpoints."""
 
 import hashlib
+import inspect
 import importlib.util
 import time
 import uuid
@@ -14,6 +15,13 @@ def _skip_if_no_fastapi() -> None:
     """Skip test if FastAPI/httpx not installed."""
     if importlib.util.find_spec("fastapi") is None or importlib.util.find_spec("httpx") is None:
         pytest.skip("fastapi/httpx not installed")
+
+
+def _supports_private_network_cors() -> bool:
+    """Return True when this Starlette CORSMiddleware supports PNA preflights."""
+    from fastapi.middleware.cors import CORSMiddleware
+
+    return "allow_private_network" in inspect.signature(CORSMiddleware.__init__).parameters
 
 
 def _reset_pairing_rate_limiters() -> None:
@@ -114,6 +122,27 @@ class TestHealthEndpoint:
         data = resp.json()
         assert "disk_total_bytes" in data
         assert "disk_free_bytes" in data
+
+
+class TestInfoEndpoint:
+    """Tests for GET /info (auth required, minimal metadata)."""
+
+    def test_info_requires_auth(self, agent_client: Any) -> None:
+        _skip_if_no_fastapi()
+        resp = agent_client.get("/info")
+        assert resp.status_code == 401
+
+    def test_info_invalid_token(self, agent_client: Any) -> None:
+        _skip_if_no_fastapi()
+        resp = agent_client.get("/info", headers={"Authorization": "Bearer bad-token"})
+        assert resp.status_code == 403
+
+    def test_info_returns_minimal_fields(self, agent_client: Any, auth_headers: dict) -> None:
+        _skip_if_no_fastapi()
+        resp = agent_client.get("/info", headers=auth_headers)
+        assert resp.status_code == 200
+        data = resp.json()
+        assert set(data.keys()) == {"version", "api_version", "min_client_version"}
 
 
 class TestConfigPathEndpoints:
@@ -698,7 +727,7 @@ class TestPairingPIN:
         assert resp.status_code == 200
         assert "token" in resp.json()
 
-    def test_pair_confirm_shows_pin(self, agent_client: Any) -> None:
+    def test_pair_confirm_hides_pin_and_origin(self, agent_client: Any) -> None:
         _skip_if_no_fastapi()
         origin = "http://127.0.0.1:8080"
         agent_client.post(
@@ -706,14 +735,13 @@ class TestPairingPIN:
             json={"origin": origin},
             headers={"Origin": origin},
         )
-        pin = self._get_active_pin()
         resp = agent_client.get("/pair/confirm")
         assert resp.status_code == 200
         data = resp.json()
         assert data["active"] is True
-        assert data["pin"] == pin
-        assert data["origin"] == origin
         assert "expires_in" in data
+        assert "pin" not in data
+        assert "origin" not in data
 
     def test_pair_confirm_no_active_challenge(self, agent_client: Any) -> None:
         _skip_if_no_fastapi()
@@ -756,6 +784,18 @@ class TestPairingPIN:
         # Challenge consumed → confirm returns inactive
         confirm = agent_client.get("/pair/confirm")
         assert confirm.json()["active"] is False
+
+    def test_pair_initiate_omits_storage_metadata(self, agent_client: Any) -> None:
+        _skip_if_no_fastapi()
+        origin = "http://127.0.0.1:8080"
+        resp = agent_client.post(
+            "/pair/initiate",
+            json={"origin": origin},
+            headers={"Origin": origin},
+        )
+        assert resp.status_code == 200
+        data = resp.json()
+        assert "storage_configured" not in data
 
 
 # ---------------------------------------------------------------------------
@@ -811,6 +851,8 @@ class TestCORSDynamicOrigins:
     def test_private_network_preflight_is_allowed_for_localhost_origin(self, agent_client: Any) -> None:
         """Loopback origins must pass Private Network Access preflights."""
         _skip_if_no_fastapi()
+        if not _supports_private_network_cors():
+            pytest.skip("Installed CORSMiddleware does not support allow_private_network")
         origin = "https://127.0.0.1:8080"
         resp = agent_client.options(
             "/files/test-assignment/test-submission",
@@ -982,7 +1024,7 @@ class TestStatusExactFields:
         resp = agent_client.get("/status")
         assert resp.status_code == 200
         data = resp.json()
-        expected_keys = {"status", "service", "version", "api_version", "min_client_version", "storage_configured"}
+        expected_keys = {"status", "service", "version", "api_version", "min_client_version"}
         assert set(data.keys()) == expected_keys
 
 

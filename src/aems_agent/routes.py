@@ -6,8 +6,8 @@ FastAPI router with all AEMS Local Bridge Agent endpoints.
 Endpoint summary:
     GET  /status                                        - Alive check (no auth)
     GET  /capabilities                                  - Discovery / public key (no auth)
-    GET  /info                                          - Version, storage, paired origins (no auth)
-    GET  /health                                        - Detailed health with disk info (no auth)
+    GET  /info                                          - Version / API info (auth)
+    GET  /health                                        - Detailed health with disk info (auth)
     GET  /config/path                                   - Get storage path (auth)
     PUT  /config/path                                   - Set storage path (auth)
     GET  /files/{assignment_id}                         - List submissions (auth)
@@ -228,14 +228,12 @@ class FileInfo(BaseModel):
 @router.get("/status")
 async def status() -> Dict[str, Any]:
     """Alive check - no authentication required. Minimal info only."""
-    config = _get_config()
     return {
         "status": "ok",
         "service": "aems-agent",
         "version": AGENT_VERSION,
         "api_version": API_VERSION,
         "min_client_version": MIN_CLIENT_API_VERSION,
-        "storage_configured": bool(config.storage_path),
     }
 
 
@@ -269,27 +267,18 @@ async def get_capabilities() -> Dict[str, Any]:
 
 
 @router.get("/info")
-async def info() -> Dict[str, Any]:
-    """Public info endpoint — version, storage path, paired origins.
-
-    Matches the runbook expectation for ``GET /info``.
-    """
-    config = _get_config()
+async def info(_token: str = Depends(_verify_token)) -> Dict[str, Any]:
+    """Authenticated agent info endpoint with minimal metadata."""
     return {
         "version": AGENT_VERSION,
         "api_version": API_VERSION,
-        "storage_path": config.storage_path,
-        "paired_origins": config.paired_origins,
+        "min_client_version": MIN_CLIENT_API_VERSION,
     }
 
 
 @router.get("/health")
-async def health() -> Dict[str, Any]:
-    """Health check - no authentication required.
-
-    Standard health-check endpoint used by load balancers, monitoring, and
-    the runbook smoke-test.  Returns storage status and disk metrics.
-    """
+async def health(_token: str = Depends(_verify_token)) -> Dict[str, Any]:
+    """Authenticated health endpoint with storage diagnostics."""
     config = _get_config()
     result: Dict[str, Any] = {
         "status": "ok",
@@ -1146,7 +1135,6 @@ async def pair_initiate(
     return {
         "challenge_id": challenge_id,
         "agent_name": f"AEMS Agent ({config.host}:{config.port})",
-        "storage_configured": config.storage_path is not None,
         "expires_in": 120,
         "requires_pin": True,
     }
@@ -1228,10 +1216,7 @@ async def pair_complete(
 @router.get("/pair/confirm")
 async def pair_confirm() -> Dict[str, Any]:
     """
-    Check pairing status — returns active challenge info (PIN + origin).
-
-    No auth required (localhost-only service). Used by tray/UI to display
-    the PIN for operator confirmation.
+    Check pairing status without exposing the operator PIN.
 
     Note: no _pairing_lock needed — asyncio single-threaded event loop
     provides atomicity between await points, and this handler has none.
@@ -1245,8 +1230,6 @@ async def pair_confirm() -> Dict[str, Any]:
 
     return {
         "active": True,
-        "pin": _pairing_challenge["pin"],
-        "origin": _pairing_challenge.get("origin", ""),
         "expires_in": int(_pairing_challenge["expires_at"] - now),
     }
 

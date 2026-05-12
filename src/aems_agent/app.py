@@ -12,6 +12,7 @@ Creates and configures the FastAPI app with:
 - Startup validation of storage path
 """
 
+import inspect
 import logging
 import logging.handlers
 import os
@@ -169,14 +170,12 @@ def create_app(
     # all_origins is a mutable list — routes.py appends to it after pairing,
     # which takes effect immediately because CORSMiddleware checks
     # `origin in self.allow_origins` on every request.
-    app.add_middleware(
-        CORSMiddleware,
-        allow_origins=all_origins,
-        allow_origin_regex=_localhost_origin_re,
-        allow_credentials=False,
-        allow_private_network=True,
-        allow_methods=["GET", "PUT", "POST", "DELETE", "HEAD", "OPTIONS"],
-        allow_headers=[
+    cors_kwargs = {
+        "allow_origins": all_origins,
+        "allow_origin_regex": _localhost_origin_re,
+        "allow_credentials": False,
+        "allow_methods": ["GET", "PUT", "POST", "DELETE", "HEAD", "OPTIONS"],
+        "allow_headers": [
             "Authorization",
             "Content-Type",
             "X-SHA256",
@@ -184,8 +183,12 @@ def create_app(
             "X-AEMS-Annotation-Contract-Version",
             "X-AEMS-Delivery-Id",
         ],
-        expose_headers=["X-SHA256", "X-AEMS-Agent-Version", "X-AEMS-API-Version"],
-    )
+        "expose_headers": ["X-SHA256", "X-AEMS-Agent-Version", "X-AEMS-API-Version"],
+    }
+    if "allow_private_network" in inspect.signature(CORSMiddleware.__init__).parameters:
+        cors_kwargs["allow_private_network"] = True
+
+    app.add_middleware(CORSMiddleware, **cors_kwargs)
 
     # Store origins list on app.state so routes.py can append after pairing.
     app.state.cors_origins = all_origins
