@@ -1911,3 +1911,76 @@ class TestGradingBundleEndpoint:
         data = resp.json()
         assert "grading_bundle" in data["features"]
         assert 1 in data["supported_bundle_versions"]
+
+
+class TestPairingClipboard:
+    """Best-effort clipboard hand-off for the pairing PIN.
+
+    The Windows tray toast is non-interactive, so the agent puts the PIN
+    on the clipboard before showing the toast.  These tests verify that
+    `_copy_pin_to_clipboard` calls the platform-appropriate command and
+    that the tray notifier is invoked with the resulting flag.
+    """
+
+    def test_copy_pin_to_clipboard_uses_clip_on_windows(self, monkeypatch) -> None:
+        from aems_agent import routes
+
+        captured = {}
+
+        def fake_run(argv, **kwargs):
+            captured["argv"] = argv
+            captured["input"] = kwargs.get("input")
+            captured["encoding"] = kwargs.get("encoding")
+            class _R:
+                returncode = 0
+            return _R()
+
+        # _copy_pin_to_clipboard imports platform + subprocess lazily.
+        import platform as _p
+        import subprocess as _sp
+        monkeypatch.setattr(_p, "system", lambda: "Windows")
+        monkeypatch.setattr(_sp, "run", fake_run)
+
+        ok = routes._copy_pin_to_clipboard("123456")
+        assert ok is True
+        assert captured["argv"] == ["clip"]
+        assert captured["input"] == "123456"
+        assert captured["encoding"] == "utf-16-le"
+
+    def test_copy_pin_to_clipboard_returns_false_on_unsupported_platform(
+        self, monkeypatch
+    ) -> None:
+        from aems_agent import routes
+
+        import platform as _p
+        monkeypatch.setattr(_p, "system", lambda: "Plan9")
+        assert routes._copy_pin_to_clipboard("123456") is False
+
+    def test_notify_pairing_pin_forwards_clipboard_flag(self) -> None:
+        from types import SimpleNamespace
+        from aems_agent import routes
+
+        captured = {}
+
+        def notifier(pin: str, clipboard_ok: bool = False) -> None:
+            captured["pin"] = pin
+            captured["clipboard_ok"] = clipboard_ok
+
+        request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(tray_notifier=notifier)))
+        routes._notify_pairing_pin(request, "654321", clipboard_ok=True)
+
+        assert captured == {"pin": "654321", "clipboard_ok": True}
+
+    def test_notify_pairing_pin_falls_back_to_legacy_notifier(self) -> None:
+        from types import SimpleNamespace
+        from aems_agent import routes
+
+        captured = {}
+
+        def legacy_notifier(pin: str) -> None:
+            captured["pin"] = pin
+
+        request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(tray_notifier=legacy_notifier)))
+        routes._notify_pairing_pin(request, "111222", clipboard_ok=True)
+
+        assert captured == {"pin": "111222"}

@@ -151,10 +151,17 @@ def create_tray(config_dir: Path) -> Any:
         menu=menu,
     )
 
-    def _notify_pairing_pin(pin: str) -> None:
-        """Show a tray notification with the pairing PIN."""
+    def _notify_pairing_pin(pin: str, clipboard_ok: bool = False) -> None:
+        """Show a tray notification with the pairing PIN.
+
+        The tray toast itself is non-interactive on Windows -- the user
+        cannot click to copy from it.  The agent puts the PIN on the OS
+        clipboard before calling this so the user can simply paste; we
+        mention that here so they know to Ctrl-V.
+        """
         try:
-            icon.notify(f"Pairing PIN: {pin}", "AEMS Agent Pairing")
+            suffix = " (copied to clipboard - paste with Ctrl+V)" if clipboard_ok else ""
+            icon.notify(f"Pairing PIN: {pin}{suffix}", "AEMS Agent Pairing")
         except Exception as e:
             logger.debug("Tray PIN notification failed: %s", e)
 

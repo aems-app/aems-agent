@@ -1129,8 +1129,13 @@ async def pair_initiate(
     print(f"  Origin: {origin_header}")
     print(f"{'=' * 40}\n")
 
+    # Put the PIN on the OS clipboard so the user can paste it directly
+    # into the AEMS web UI -- the tray toast is non-interactive, so there
+    # is no other way to copy from it.
+    clipboard_ok = _copy_pin_to_clipboard(pin)
+
     # Tray notification if available
-    _notify_pairing_pin(request, pin)
+    _notify_pairing_pin(request, pin, clipboard_ok)
 
     return {
         "challenge_id": challenge_id,
@@ -1234,11 +1239,49 @@ async def pair_confirm() -> Dict[str, Any]:
     }
 
 
-def _notify_pairing_pin(request: Request, pin: str) -> None:
+def _copy_pin_to_clipboard(pin: str) -> bool:
+    """Best-effort: place the pairing PIN on the OS clipboard.
+
+    Returns True if the clipboard was updated, False otherwise.  Failure
+    is silent -- the PIN is still in the tray toast and on stdout.
+    """
+    import platform
+    import subprocess
+
+    system = platform.system()
+    try:
+        if system == "Windows":
+            # `clip.exe` is built into Windows and takes stdin verbatim.
+            subprocess.run(["clip"], input=pin, encoding="utf-16-le", check=True, timeout=5)
+            return True
+        if system == "Darwin":
+            subprocess.run(["pbcopy"], input=pin, text=True, check=True, timeout=5)
+            return True
+        if system == "Linux":
+            # Try wl-copy (Wayland) then xclip (X11); both are common on
+            # desktop distros.  If neither is installed, fall through.
+            for argv in (["wl-copy"], ["xclip", "-selection", "clipboard"]):
+                try:
+                    subprocess.run(argv, input=pin, text=True, check=True, timeout=5)
+                    return True
+                except (FileNotFoundError, subprocess.CalledProcessError):
+                    continue
+    except Exception as e:  # pragma: no cover -- platform-dependent
+        logger.debug("Clipboard copy failed: %s", e)
+    return False
+
+
+def _notify_pairing_pin(request: Request, pin: str, clipboard_ok: bool = False) -> None:
     """Send tray notification with pairing PIN if tray notifier is available."""
     notifier = getattr(request.app.state, "tray_notifier", None)
     if notifier is not None:
         try:
-            notifier(pin)
-        except Exception as e:
+            notifier(pin, clipboard_ok)
+        except TypeError:
+            # Older tray notifiers don't know about the clipboard flag yet.
+            try:
+                notifier(pin)
+            except Exception as e:  # pragma: no cover
+                logger.debug("Tray notification failed: %s", e)
+        except Exception as e:  # pragma: no cover
             logger.debug("Tray notification failed: %s", e)
