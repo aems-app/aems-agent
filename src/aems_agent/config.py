@@ -24,12 +24,34 @@ from pydantic import BaseModel, Field, field_validator
 
 logger = logging.getLogger(__name__)
 
-try:
-    from importlib.metadata import version as _pkg_version
+def _resolve_agent_version() -> str:
+    """Best-effort lookup of the agent version.
 
-    AGENT_VERSION = _pkg_version("aems-agent")
-except Exception:
-    AGENT_VERSION = "0.0.0-dev"
+    1. importlib.metadata works for normal pip installs.
+    2. In PyInstaller bundles the dist-info is missing, so fall back to the
+       packaged ``_version.txt`` written at build time.
+    3. As a last resort return ``0.0.0-dev``.
+    """
+    try:
+        from importlib.metadata import version as _pkg_version
+
+        return _pkg_version("aems-agent")
+    except Exception:
+        pass
+    try:
+        from pathlib import Path
+
+        version_file = Path(__file__).parent / "_version.txt"
+        if version_file.exists():
+            text = version_file.read_text(encoding="utf-8").strip()
+            if text:
+                return text
+    except Exception:
+        pass
+    return "0.0.0-dev"
+
+
+AGENT_VERSION = _resolve_agent_version()
 API_VERSION = "1.0.0"
 MIN_CLIENT_API_VERSION = "1.0.0"
 

@@ -3,8 +3,14 @@
 
 !include "MUI2.nsh"
 
+; Default version when invoked without -DAGENT_VERSION (e.g., directly via NSIS).
+; The build pipeline passes the real version from pyproject.toml at build time.
+!ifndef AGENT_VERSION
+    !define AGENT_VERSION "0.0.0-dev"
+!endif
+
 ; General
-Name "AEMS Agent"
+Name "AEMS Agent ${AGENT_VERSION}"
 OutFile "${OUTPUT_DIR}\aems-agent-setup.exe"
 InstallDir "$LOCALAPPDATA\AEMS Agent"
 InstallDirRegKey HKCU "Software\AEMS Agent" "InstallDir"
@@ -56,7 +62,7 @@ Section "Install"
     WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\AEMS Agent" \
         "Publisher" "AEMS Project"
     WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\AEMS Agent" \
-        "DisplayVersion" "0.2.0"
+        "DisplayVersion" "${AGENT_VERSION}"
     WriteRegDWORD HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\AEMS Agent" \
         "NoModify" 1
     WriteRegDWORD HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\AEMS Agent" \

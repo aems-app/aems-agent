@@ -31,11 +31,35 @@ def run(cmd: List[str], cwd: Optional[Path] = None) -> None:
     subprocess.check_call(cmd, cwd=str(cwd or PROJECT_ROOT))
 
 
+def _read_pyproject_version() -> str:
+    """Return the project version from pyproject.toml (best-effort)."""
+    import tomllib
+
+    pyproject_path = PROJECT_ROOT / "pyproject.toml"
+    with open(pyproject_path, "rb") as f:
+        data = tomllib.load(f)
+    return str(data.get("project", {}).get("version", "0.0.0"))
+
+
+def _write_version_file() -> None:
+    """Drop the resolved pyproject version into the package source.
+
+    PyInstaller bundles loose the dist-info metadata, so config.py reads
+    this file as a fallback when ``importlib.metadata.version`` fails.
+    """
+    version = _read_pyproject_version()
+    version_file = PROJECT_ROOT / "src" / "aems_agent" / "_version.txt"
+    version_file.write_text(version, encoding="utf-8")
+    print(f"  Wrote {version_file} -> {version}")
+
+
 def build_pyinstaller() -> Path:
     """Run PyInstaller to create the agent distribution."""
     spec_file = PACKAGING_DIR / "aems-agent.spec"
     if not spec_file.exists():
         raise FileNotFoundError(f"Spec file not found: {spec_file}")
+
+    _write_version_file()
 
     run([
         sys.executable, "-m", "PyInstaller",
@@ -64,10 +88,13 @@ def build_windows_installer(dist_path: Path) -> Path:
         print("  [SKIP] makensis not found in PATH")
         return dist_path
 
+    version = _read_pyproject_version()
+
     run([
         nsis_path,
         f"/DDIST_DIR={dist_path}",
         f"/DOUTPUT_DIR={DIST_DIR}",
+        f"/DAGENT_VERSION={version}",
         str(nsi_file),
     ])
 

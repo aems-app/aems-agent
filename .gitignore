@@ -43,3 +43,4 @@ config/
 
 # Tooling output (knowledge-graph extractor, leaks local workspace path)
 graphify-out/
+src/aems_agent/_version.txt
