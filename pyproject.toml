@@ -33,6 +33,12 @@ dependencies = [
     "pillow>=10.0.0",
     "aems-pdf-annotator>=0.2.0,<0.3.0",
     "pymupdf>=1.25.0",
+    # pystray is required for the tray notification that surfaces the
+    # pairing PIN to the user.  Without it the agent falls back to
+    # printing the PIN to stdout, which is invisible to users running
+    # the installed agent via Start Menu / autostart.  Small package,
+    # cross-platform, no harm including unconditionally.
+    "pystray>=0.19.0",
 ]
 
 [project.urls]
