@@ -171,11 +171,15 @@ def generate_bundle(
 
             # For handwritten pages, PyMuPDF's get_text() produces garbled
             # characters that confuse the LLM (it tries to interpret garbage
-            # text instead of looking at the image). Clear the text for pages
-            # that will be rendered as images in a handwritten document so the
-            # LLM relies on visual content only.
+            # text instead of looking at the image). Clear the text only on
+            # the specific low-text pages so the LLM relies on visual content
+            # for those, while the long typed pages keep their native text
+            # for downstream native-text routing on the server. The earlier
+            # doc-wide gate (`doc_has_handwriting`) zeroed text on every
+            # page of typed reports that happen to start with a short cover
+            # (Phase 9 salmi_simon.pdf, 2026-05-13).
             effective_text = text
-            if page_needs_vision and doc_has_handwriting and strategy == "smart":
+            if is_low_text and strategy == "smart":
                 effective_text = ""
 
             page_data: Dict[str, Any] = {

@@ -76,6 +76,50 @@ class TestGenerateBundle:
         bundle = generate_bundle(sample_pdf, strategy="smart", dpi=72)
         assert bundle["metadata"]["page_count"] == 2
 
+    def test_smart_strategy_preserves_typed_text_across_short_cover(
+        self, tmp_path: Path
+    ) -> None:
+        """Regression: a typed multi-page report with a short cover page must
+        retain native text on the long answer pages.
+
+        Phase 9 salmi_simon.pdf surfaced this defect: page 1 had a 33-char
+        typed cover ("Homework 1\\nSimon Salmi\\nApril 2024") which tripped
+        the doc-wide handwriting heuristic and zeroed `effective_text` for
+        every page. The bundle then shipped only images, prod's native-text
+        router had no input, and the LLM-vision detector silently dropped
+        typed Q3 continuation pages as non-answer.
+
+        The smart-bundle text-clearing was meant to suppress garbled OCR on
+        per-page handwriting, not to wipe text from typed reports that
+        happen to start with a short cover.
+        """
+        doc = fitz.open()
+        cover = doc.new_page(width=612, height=792)
+        cover.insert_text((72, 100), "Cover Page\nAuthor X", fontsize=12)
+        answer = doc.new_page(width=612, height=792)
+        answer.insert_text(
+            (72, 100),
+            "3.1.2 Determining the effective spring constant\n"
+            "The student derives keff = 2 EcA sin(alpha)/a cos^2(alpha) using\n"
+            "the small-deformation approximation. Substituting equation (16)\n"
+            "into (19) yields the spring constant identified above.",
+            fontsize=11,
+        )
+        pdf_path = tmp_path / "mixed_typed.pdf"
+        doc.save(str(pdf_path))
+        doc.close()
+
+        bundle = generate_bundle(pdf_path, strategy="smart", dpi=72)
+
+        # Cover page is short-text; suppressing its garbled text is fine.
+        # Long typed answer page must keep its native text so the server's
+        # native-text router can anchor it to a task.
+        answer_text = bundle["pages"][1]["text"]
+        assert "effective spring constant" in answer_text, (
+            f"Expected typed answer text on page 2; got {answer_text!r}"
+        )
+        assert "3.1.2" in answer_text
+
     def test_max_pages_limit(self, sample_pdf: Path) -> None:
         bundle = generate_bundle(sample_pdf, strategy="text_only", dpi=150, max_pages=1)
         assert len(bundle["pages"]) == 1
