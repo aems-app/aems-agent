@@ -52,7 +52,7 @@ def _create_icon_image(color: str = "green") -> Any:
     md = ImageDraw.Draw(mask)
     md.line(pts, fill=255, width=stroke_w, joint="curve")
     r = stroke_w // 2
-    for (x, y) in (pts[0], pts[-1]):
+    for x, y in (pts[0], pts[-1]):
         md.ellipse([(x - r, y - r), (x + r, y + r)], fill=255)
     white = Image.new("RGBA", (size, size), (255, 255, 255, 255))
     img.paste(white, (0, 0), mask)
