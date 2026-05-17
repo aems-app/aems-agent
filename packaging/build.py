@@ -11,7 +11,6 @@ Outputs:
 """
 
 import argparse
-import os
 import platform
 import shutil
 import subprocess
@@ -23,6 +22,17 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 PACKAGING_DIR = PROJECT_ROOT / "packaging"
 DIST_DIR = PROJECT_ROOT / "dist"
 BUILD_DIR = PROJECT_ROOT / "build"
+
+
+def ensure_windows_icon_asset() -> Path:
+    """Generate the packaged Windows icon before building."""
+    src_dir = PROJECT_ROOT / "src"
+    if str(src_dir) not in sys.path:
+        sys.path.insert(0, str(src_dir))
+
+    from aems_agent.icons import ensure_windows_icon
+
+    return ensure_windows_icon(PACKAGING_DIR / "icon.ico")
 
 
 def run(cmd: List[str], cwd: Optional[Path] = None) -> None:
@@ -60,13 +70,18 @@ def build_pyinstaller() -> Path:
         raise FileNotFoundError(f"Spec file not found: {spec_file}")
 
     _write_version_file()
+    ensure_windows_icon_asset()
 
-    run([
-        sys.executable, "-m", "PyInstaller",
-        "--clean",
-        "--noconfirm",
-        str(spec_file),
-    ])
+    run(
+        [
+            sys.executable,
+            "-m",
+            "PyInstaller",
+            "--clean",
+            "--noconfirm",
+            str(spec_file),
+        ]
+    )
 
     output = DIST_DIR / "aems-agent"
     if not output.exists():
@@ -90,13 +105,15 @@ def build_windows_installer(dist_path: Path) -> Path:
 
     version = _read_pyproject_version()
 
-    run([
-        nsis_path,
-        f"/DDIST_DIR={dist_path}",
-        f"/DOUTPUT_DIR={DIST_DIR}",
-        f"/DAGENT_VERSION={version}",
-        str(nsi_file),
-    ])
+    run(
+        [
+            nsis_path,
+            f"/DDIST_DIR={dist_path}",
+            f"/DOUTPUT_DIR={DIST_DIR}",
+            f"/DAGENT_VERSION={version}",
+            str(nsi_file),
+        ]
+    )
 
     installer = DIST_DIR / "aems-agent-setup.exe"
     if installer.exists():
@@ -157,13 +174,18 @@ def build_macos_dmg(dist_path: Path) -> Path:
     if shutil.which("hdiutil"):
         if dmg_path.exists():
             dmg_path.unlink()
-        run([
-            "hdiutil", "create",
-            "-volname", app_name,
-            "-srcfolder", str(app_dir),
-            "-ov",
-            str(dmg_path),
-        ])
+        run(
+            [
+                "hdiutil",
+                "create",
+                "-volname",
+                app_name,
+                "-srcfolder",
+                str(app_dir),
+                "-ov",
+                str(dmg_path),
+            ]
+        )
         print(f"  macOS DMG: {dmg_path}")
 
     # Write LaunchAgent plist to dist (not source tree)
@@ -242,9 +264,7 @@ def main() -> None:
     target = args.platform
     if target == "auto":
         system = platform.system().lower()
-        target = {"windows": "windows", "darwin": "macos", "linux": "linux"}.get(
-            system, "linux"
-        )
+        target = {"windows": "windows", "darwin": "macos", "linux": "linux"}.get(system, "linux")
 
     print(f"Building AEMS Agent for {target}...")
     print(f"  Project root: {PROJECT_ROOT}")

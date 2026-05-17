@@ -17,6 +17,13 @@ block_cipher = None
 
 # Project root (one level up from this spec file)
 PROJECT_ROOT = Path(SPECPATH).parent
+SRC_ROOT = PROJECT_ROOT / "src"
+if str(SRC_ROOT) not in sys.path:
+    sys.path.insert(0, str(SRC_ROOT))
+
+from aems_agent.icons import ensure_windows_icon
+
+WINDOWS_ICON_PATH = ensure_windows_icon(PROJECT_ROOT / "packaging" / "icon.ico")
 
 a = Analysis(
     # Use the launcher wrapper, not cli.py directly.  PyInstaller invokes
@@ -113,9 +120,7 @@ exe = EXE(
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
-    icon=str(PROJECT_ROOT / 'packaging' / 'icon.ico')
-    if (PROJECT_ROOT / 'packaging' / 'icon.ico').exists()
-    else None,
+    icon=str(WINDOWS_ICON_PATH),
 )
 
 coll = COLLECT(

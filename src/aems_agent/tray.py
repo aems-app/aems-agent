@@ -16,48 +16,14 @@ import webbrowser
 from pathlib import Path
 from typing import Any
 
+from .icons import RUNTIME_ICON_SIZE, render_status_icon
+
 logger = logging.getLogger(__name__)
 
 
 def _create_icon_image(color: str = "green") -> Any:
-    """Render the tray icon: rounded-square in the state color with a white check.
-
-    Drawn at 256x256 and let the OS scale to tray size — the polygon-based
-    checkmark stays crisp at 16x16. Maps directly to AEMS's green-check
-    annotation glyph so the tray badge matches what users see on graded PDFs.
-    """
-    from PIL import Image, ImageDraw
-
-    size = 256
-    palette = {
-        "green": (46, 160, 67, 255),
-        "yellow": (210, 158, 14, 255),
-        "red": (207, 34, 46, 255),
-    }
-    bg = palette.get(color, palette["green"])
-
-    img = Image.new("RGBA", (size, size), (0, 0, 0, 0))
-    draw = ImageDraw.Draw(img)
-    draw.rounded_rectangle((0, 0, size, size), radius=int(size * 0.22), fill=bg)
-
-    # Checkmark drawn as a thick polyline with round caps. Polygon-based so it
-    # has no font dependency and anti-aliases cleanly when scaled down.
-    stroke_w = int(size * 0.18)
-    pts = [
-        (size * 0.22, size * 0.55),
-        (size * 0.44, size * 0.74),
-        (size * 0.80, size * 0.30),
-    ]
-    mask = Image.new("L", (size, size), 0)
-    md = ImageDraw.Draw(mask)
-    md.line(pts, fill=255, width=stroke_w, joint="curve")
-    r = stroke_w // 2
-    for x, y in (pts[0], pts[-1]):
-        md.ellipse([(x - r, y - r), (x + r, y + r)], fill=255)
-    white = Image.new("RGBA", (size, size), (255, 255, 255, 255))
-    img.paste(white, (0, 0), mask)
-
-    return img
+    """Render the live tray icon at a native runtime size."""
+    return render_status_icon(color, size=RUNTIME_ICON_SIZE)
 
 
 def _open_folder_picker(config_dir: Path) -> None:
