@@ -279,6 +279,80 @@ class TestFileOperations:
         assert resp.status_code == 404
 
 
+class TestDeleteAssignmentFiles:
+    """Tests for DELETE /files/{assignment_id}."""
+
+    def test_delete_assignment_removes_submission_data_and_cache(
+        self,
+        agent_client: Any,
+        auth_headers: dict,
+        tmp_storage_path: Path,
+        sample_pdf: bytes,
+    ) -> None:
+        _skip_if_no_fastapi()
+        agent_client.put(
+            "/files/a1/s1",
+            content=sample_pdf,
+            headers={**auth_headers, "Content-Type": "application/pdf"},
+        )
+        agent_client.put(
+            "/files/a1/s1/annotated",
+            content=sample_pdf,
+            headers={**auth_headers, "Content-Type": "application/pdf"},
+        )
+
+        results_dir = tmp_storage_path / "_data" / "a1" / "results"
+        results_dir.mkdir(parents=True)
+        (results_dir / "s1.json").write_text("{}", encoding="utf-8")
+        (tmp_storage_path / "_data" / "a1" / "assignment.json").write_text(
+            "{}",
+            encoding="utf-8",
+        )
+
+        cache_dir = tmp_storage_path / "_cache" / "bundles" / "a1" / "s1"
+        cache_dir.mkdir(parents=True)
+        (cache_dir / "bundle.json").write_text("{}", encoding="utf-8")
+
+        resp = agent_client.delete("/files/a1", headers=auth_headers)
+        assert resp.status_code == 200
+        payload = resp.json()
+        assert payload["success"] is True
+        assert payload["assignment_deleted"] is True
+        assert payload["data_deleted"] is True
+        assert payload["cache_deleted"] is True
+        assert not (tmp_storage_path / "a1").exists()
+        assert not (tmp_storage_path / "_data" / "a1").exists()
+        assert not (tmp_storage_path / "_cache" / "bundles" / "a1").exists()
+
+    def test_delete_assignment_with_only_data_succeeds(
+        self,
+        agent_client: Any,
+        auth_headers: dict,
+        tmp_storage_path: Path,
+    ) -> None:
+        _skip_if_no_fastapi()
+        data_dir = tmp_storage_path / "_data" / "a1"
+        data_dir.mkdir(parents=True)
+        (data_dir / "assignment.json").write_text("{}", encoding="utf-8")
+
+        resp = agent_client.delete("/files/a1", headers=auth_headers)
+        assert resp.status_code == 200
+        payload = resp.json()
+        assert payload["assignment_deleted"] is False
+        assert payload["data_deleted"] is True
+        assert payload["cache_deleted"] is False
+        assert not data_dir.exists()
+
+    def test_delete_assignment_nonexistent_returns_404(
+        self,
+        agent_client: Any,
+        auth_headers: dict,
+    ) -> None:
+        _skip_if_no_fastapi()
+        resp = agent_client.delete("/files/missing", headers=auth_headers)
+        assert resp.status_code == 404
+
+
 class TestListSubmissions:
     """Tests for GET /files/{assignment_id}."""
 

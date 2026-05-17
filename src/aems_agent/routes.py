@@ -13,6 +13,7 @@ Endpoint summary:
     GET  /files/{assignment_id}                         - List submissions (auth)
     GET  /files/{assignment_id}/{submission_id}          - Download PDF (auth)
     PUT  /files/{assignment_id}/{submission_id}          - Store PDF (auth)
+    DELETE /files/{assignment_id}                        - Delete all local files for an assessment (auth)
     DELETE /files/{assignment_id}/{submission_id}        - Delete PDF (auth)
     GET  /files/{assignment_id}/{submission_id}/annotated - Download annotated (auth)
     PUT  /files/{assignment_id}/{submission_id}/annotated - Store annotated (auth)
@@ -147,6 +148,12 @@ def _submission_dir(storage_path: Path, assignment_id: str, submission_id: str) 
     _validate_path_segment(assignment_id, "assignment_id")
     _validate_path_segment(submission_id, "submission_id")
     return validate_path_within_storage(storage_path, assignment_id, submission_id)
+
+
+def _assignment_dir(storage_path: Path, assignment_id: str) -> Path:
+    """Get the validated assignment directory path."""
+    _validate_path_segment(assignment_id, "assignment_id")
+    return validate_path_within_storage(storage_path, assignment_id)
 
 
 def _annotated_pdf_path(storage_path: Path, assignment_id: str, submission_id: str) -> Path:
@@ -400,6 +407,45 @@ async def get_submission(
         filename=f"submission_{submission_id}.pdf",
         headers={"X-SHA256": sha256},
     )
+
+
+@router.delete("/files/{assignment_id}")
+async def delete_assignment_files(
+    assignment_id: str,
+    _token: str = Depends(_verify_token),
+    _rl: None = Depends(_check_rate_limit),
+) -> Dict[str, Any]:
+    """Delete all local files associated with an assessment."""
+    storage_path = _get_storage_path()
+    assignment_dir = _assignment_dir(storage_path, assignment_id)
+    data_dir = _data_dir(storage_path, assignment_id)
+    cache_dir = validate_path_within_storage(storage_path, "_cache", "bundles", assignment_id)
+
+    assignment_deleted = False
+    data_deleted = False
+    cache_deleted = False
+
+    if assignment_dir.exists():
+        shutil.rmtree(str(assignment_dir))
+        assignment_deleted = True
+    if data_dir.exists():
+        shutil.rmtree(str(data_dir))
+        data_deleted = True
+    if cache_dir.exists():
+        shutil.rmtree(str(cache_dir))
+        cache_deleted = True
+
+    if not (assignment_deleted or data_deleted or cache_deleted):
+        raise HTTPException(status_code=404, detail="Assessment files not found")
+
+    return {
+        "success": True,
+        "assignment_id": assignment_id,
+        "assignment_deleted": assignment_deleted,
+        "data_deleted": data_deleted,
+        "cache_deleted": cache_deleted,
+        "message": "Assessment files deleted",
+    }
 
 
 @router.put("/files/{assignment_id}/{submission_id}")
