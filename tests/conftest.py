@@ -14,11 +14,17 @@ def _reset_route_state() -> Generator:
     from aems_agent.canvas_download import _download_jobs
 
     routes._pairing_challenge = None
+    routes._pairing_lockout_until = 0.0
+    routes._pairing_failed_pin_count = 0
+    routes._pairing_failed_pin_window_started_at = 0.0
     routes._rate_limiter.reset()
     routes._pairing_rate_limiter.reset()
     _download_jobs.clear()
     yield
     routes._pairing_challenge = None
+    routes._pairing_lockout_until = 0.0
+    routes._pairing_failed_pin_count = 0
+    routes._pairing_failed_pin_window_started_at = 0.0
     routes._rate_limiter.reset()
     routes._pairing_rate_limiter.reset()
     _download_jobs.clear()
@@ -72,7 +78,7 @@ def agent_client(agent_config_dir: Path, agent_token: str) -> Generator:
     from aems_agent.app import create_app
 
     app = create_app(config_dir=agent_config_dir)
-    client = TestClient(app)
+    client = TestClient(app, base_url="http://127.0.0.1:61234")
     yield client
 
 

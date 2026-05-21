@@ -2,6 +2,22 @@
 
 All notable changes to `aems-agent` are recorded here. Format follows [Keep a Changelog](https://keepachangelog.com/) and the project uses [SemVer](https://semver.org/).
 
+## Unreleased
+
+### Security
+
+- **Loopback Host header enforcement for every route.** The agent now rejects requests whose `Host` header is not one of the expected local endpoints for the configured bind target and port. This closes the DNS-rebinding gap where a hostile origin could reach the local service through an attacker-controlled hostname that later resolves to `127.0.0.1`.
+- **Pairing PIN no longer prints to non-interactive stdout.** The PIN is still available through the tray notification and clipboard hand-off, but daemonized launches and captured stdout logs no longer receive the secret by default.
+- **Pairing flow hardening.** `POST /pair/initiate` now refuses to overwrite an active challenge, `POST /pair/complete` no longer consumes the challenge on pre-PIN validation failures, failure details are collapsed to `Pairing failed`, and repeated bad PIN attempts trigger a temporary lockout.
+- **JSON endpoints now enforce a request-body cap.** The agent reads JSON bodies through a bounded stream before parsing, preventing authenticated memory-exhaustion requests against the results, assignment, grading-bundle, and annotation CRUD endpoints.
+
+### Fixed
+
+- **JSON and Canvas downloads now use randomized temp files with cleanup on failure.** This removes predictable `.tmp` filenames and avoids orphaned temp files when `os.replace()` fails.
+- **PDF download hashing no longer buffers the whole file in memory.** `/files/{aid}/{sid}` and `/files/{aid}/{sid}/annotated` now compute SHA-256 headers incrementally.
+- **Annotated-PDF cache freshness now uses nanosecond mtimes.** This avoids same-second cache reuse on fast file updates.
+- **Annotation CRUD responses now round-trip rect coordinates back in PDF space.** The agent converts rects back from PyMuPDF space before returning them to the browser/UI.
+
 ## 0.3.6 — 2026-05-17
 
 Assessment-level cleanup endpoint required by the AEMS server-side delete flow that landed in `aems` `df047252`.

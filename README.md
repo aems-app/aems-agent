@@ -8,6 +8,7 @@ A lightweight companion service that runs on `localhost` and provides REST API a
 
 - Runs as a local service on `127.0.0.1:61234` (default).
 - Exposes an authenticated REST API the AEMS web app uses to read source PDFs and write annotated PDFs from your local storage folder.
+- Enforces local `Host` headers and a PIN-based browser pairing flow before granting the web app access.
 - Optional system-tray icon so it's visible while running.
 - Optional offline grading bundle support for fully-local workflows.
 - Never sends PDF content out unless the user explicitly attaches a Canvas / offline workflow in the hosted app.

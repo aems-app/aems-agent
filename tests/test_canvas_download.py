@@ -345,6 +345,36 @@ class TestDownloadSubmissions:
         assert [result.submission_id for result in seen] == [1001, 1002]
         assert [result.submission_id for result in results] == [1001, 1002]
 
+    @pytest.mark.asyncio
+    async def test_download_cleans_up_temp_file_on_replace_failure(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Partial writes must not leave temp files behind on disk."""
+        from aems_agent import canvas_download
+
+        pdf_content = b"%PDF-1.4 temp cleanup"
+        mock_response = AsyncMock()
+        mock_response.content = pdf_content
+        mock_response.raise_for_status = lambda: None
+
+        mock_client = AsyncMock()
+        mock_client.get.return_value = mock_response
+
+        def fail_replace(_src: str, _dst: str) -> None:
+            raise OSError("replace failed")
+
+        monkeypatch.setattr(canvas_download.os, "replace", fail_replace)
+
+        manifest = _make_manifest()
+        results = await canvas_download.download_submissions(
+            manifest=manifest,
+            storage_path=tmp_path,
+            http_client=mock_client,
+        )
+
+        assert results[0].status == "failed"
+        assert not list(tmp_path.rglob("*.tmp"))
+
 
 # ---------------------------------------------------------------------------
 # DownloadJob Tests

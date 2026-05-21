@@ -92,6 +92,21 @@ class TestStatusEndpoint:
         assert resp.status_code == 200
 
 
+class TestHostHeaderValidation:
+    """Tests for localhost-only Host header enforcement."""
+
+    def test_rejects_untrusted_host_on_public_endpoint(self, agent_client: Any) -> None:
+        _skip_if_no_fastapi()
+        resp = agent_client.get("/status", headers={"Host": "evil.com:61234"})
+        assert resp.status_code == 400
+        assert "host" in resp.json()["detail"].lower()
+
+    def test_accepts_localhost_alias(self, agent_client: Any) -> None:
+        _skip_if_no_fastapi()
+        resp = agent_client.get("/status", headers={"Host": "localhost:61234"})
+        assert resp.status_code == 200
+
+
 class TestHealthEndpoint:
     """Tests for GET /health (auth required)."""
 
@@ -123,6 +138,16 @@ class TestHealthEndpoint:
         assert "disk_total_bytes" in data
         assert "disk_free_bytes" in data
 
+    def test_health_respects_rate_limit(
+        self, agent_client: Any, auth_headers: dict, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _skip_if_no_fastapi()
+        from aems_agent import routes
+
+        monkeypatch.setattr(routes._rate_limiter, "is_allowed", lambda _client_ip: False)
+        resp = agent_client.get("/health", headers=auth_headers)
+        assert resp.status_code == 429
+
 
 class TestInfoEndpoint:
     """Tests for GET /info (auth required, minimal metadata)."""
@@ -143,6 +168,16 @@ class TestInfoEndpoint:
         assert resp.status_code == 200
         data = resp.json()
         assert set(data.keys()) == {"version", "api_version", "min_client_version"}
+
+    def test_info_respects_rate_limit(
+        self, agent_client: Any, auth_headers: dict, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _skip_if_no_fastapi()
+        from aems_agent import routes
+
+        monkeypatch.setattr(routes._rate_limiter, "is_allowed", lambda _client_ip: False)
+        resp = agent_client.get("/info", headers=auth_headers)
+        assert resp.status_code == 429
 
 
 class TestConfigPathEndpoints:
@@ -547,7 +582,7 @@ class TestPairing:
             headers={"Origin": "https://example.com"},
         )
         assert complete_resp.status_code == 403
-        assert "origin mismatch" in complete_resp.json()["detail"].lower()
+        assert complete_resp.json()["detail"] == "Pairing failed"
 
     def test_pair_rejects_body_header_origin_mismatch(self, agent_client: Any) -> None:
         _skip_if_no_fastapi()
@@ -572,7 +607,7 @@ class TestPairing:
             json={"challenge_id": "fake", "origin": "http://127.0.0.1:8080", "pin": "000000"},
             headers={"Origin": "http://127.0.0.1:8080"},
         )
-        assert resp.status_code == 400
+        assert resp.status_code == 403
 
     def test_pair_complete_expired_challenge(self, agent_client: Any) -> None:
         _skip_if_no_fastapi()
@@ -621,14 +656,13 @@ class TestPairing:
         )
         assert bad_resp.status_code == 403
 
-        # Challenge should be consumed — correct ID should also fail now
-        _reset_pairing_rate_limiters()
+        # Challenge should remain active after pre-PIN validation failures.
         retry_resp = agent_client.post(
             "/pair/complete",
             json={"challenge_id": challenge_id, "origin": origin, "pin": pin},
             headers={"Origin": origin},
         )
-        assert retry_resp.status_code == 400
+        assert retry_resp.status_code == 200
 
 
 class TestPathValidation:
@@ -781,7 +815,7 @@ class TestPairingPIN:
         # Wrong PIN → 403 (unless 000000 happens to be the real pin, extremely unlikely)
         # The challenge is also consumed
         assert resp.status_code == 403
-        assert "pin" in resp.json()["detail"].lower()
+        assert resp.json()["detail"] == "Pairing failed"
 
     def test_pair_complete_correct_pin_succeeds(self, agent_client: Any) -> None:
         _skip_if_no_fastapi()
@@ -995,6 +1029,11 @@ class TestNormalizeOrigin:
 
         assert _normalize_origin("http://example.com?q=1") is None
 
+    def test_userinfo_rejected(self) -> None:
+        from aems_agent.routes import _normalize_origin
+
+        assert _normalize_origin("http://user:pass@example.com") is None
+
 
 # ---------------------------------------------------------------------------
 # Test Gap 3: 503 paths (no storage)
@@ -1020,7 +1059,7 @@ def agent_client_no_storage(tmp_path: Path) -> Any:
     ensure_auth_token(config_dir)
 
     app = create_app(config_dir=config_dir)
-    return TestClient(app)
+    return TestClient(app, base_url="http://127.0.0.1:61234")
 
 
 @pytest.fixture
@@ -1269,6 +1308,34 @@ class TestDataJsonEndpoints:
         )
         assert resp.status_code == 400
         assert "json" in resp.json()["detail"].lower()
+
+    def test_put_result_json_rejects_oversized_body(
+        self, agent_client: Any, auth_headers: dict, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _skip_if_no_fastapi()
+        from aems_agent import routes
+
+        monkeypatch.setattr(routes, "_MAX_JSON_BYTES", 32)
+        resp = agent_client.put(
+            "/data/100/results/200.json",
+            json={"feedback": "x" * 128},
+            headers=auth_headers,
+        )
+        assert resp.status_code == 413
+
+    def test_put_assignment_json_rejects_oversized_body(
+        self, agent_client: Any, auth_headers: dict, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _skip_if_no_fastapi()
+        from aems_agent import routes
+
+        monkeypatch.setattr(routes, "_MAX_JSON_BYTES", 32)
+        resp = agent_client.put(
+            "/data/100/assignment.json",
+            json={"name": "x" * 128},
+            headers=auth_headers,
+        )
+        assert resp.status_code == 413
 
 
 class TestResultWriteIdempotency:
@@ -2058,3 +2125,105 @@ class TestPairingClipboard:
         routes._notify_pairing_pin(request, "111222", clipboard_ok=True)
 
         assert captured == {"pin": "111222"}
+
+    def test_terminal_echo_skipped_for_non_tty(self) -> None:
+        from io import StringIO
+
+        from aems_agent import routes
+
+        class _FakeStdout(StringIO):
+            def isatty(self) -> bool:
+                return False
+
+        stdout = _FakeStdout()
+        echoed = routes._maybe_echo_pairing_pin("123456", "http://127.0.0.1:8080", stdout=stdout)
+        assert echoed is False
+        assert stdout.getvalue() == ""
+
+
+class TestPairingHardening:
+    """Regression tests for challenge lifecycle hardening."""
+
+    def test_pair_initiate_conflicts_when_challenge_active(self, agent_client: Any) -> None:
+        _skip_if_no_fastapi()
+        origin = "http://127.0.0.1:8080"
+        first = agent_client.post(
+            "/pair/initiate",
+            json={"origin": origin},
+            headers={"Origin": origin},
+        )
+        assert first.status_code == 200
+
+        second = agent_client.post(
+            "/pair/initiate",
+            json={"origin": "http://localhost:3000"},
+            headers={"Origin": "http://localhost:3000"},
+        )
+        assert second.status_code == 409
+        assert "expires_in" in second.json()
+
+    def test_pair_complete_wrong_pin_uses_generic_detail(self, agent_client: Any) -> None:
+        _skip_if_no_fastapi()
+        origin = "http://127.0.0.1:8080"
+        init_resp = agent_client.post(
+            "/pair/initiate",
+            json={"origin": origin},
+            headers={"Origin": origin},
+        )
+        challenge_id = init_resp.json()["challenge_id"]
+        resp = agent_client.post(
+            "/pair/complete",
+            json={"challenge_id": challenge_id, "origin": origin, "pin": "000000"},
+            headers={"Origin": origin},
+        )
+        assert resp.status_code == 403
+        assert resp.json()["detail"] == "Pairing failed"
+
+    def test_pair_complete_wrong_challenge_id_uses_generic_detail(self, agent_client: Any) -> None:
+        _skip_if_no_fastapi()
+        origin = "http://127.0.0.1:8080"
+        init_resp = agent_client.post(
+            "/pair/initiate",
+            json={"origin": origin},
+            headers={"Origin": origin},
+        )
+        pin = TestPairingPIN()._get_active_pin()
+        resp = agent_client.post(
+            "/pair/complete",
+            json={"challenge_id": "wrong", "origin": origin, "pin": pin},
+            headers={"Origin": origin},
+        )
+        assert resp.status_code == 403
+        assert resp.json()["detail"] == "Pairing failed"
+
+    def test_pairing_locks_after_repeated_bad_pins(
+        self, agent_client: Any, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _skip_if_no_fastapi()
+        from aems_agent import routes
+
+        monkeypatch.setattr(routes, "_PAIRING_MAX_FAILED_PINS", 2)
+        monkeypatch.setattr(routes, "_PAIRING_LOCKOUT_SECONDS", 60.0)
+
+        origin = "http://127.0.0.1:8080"
+        for _attempt in range(2):
+            init_resp = agent_client.post(
+                "/pair/initiate",
+                json={"origin": origin},
+                headers={"Origin": origin},
+            )
+            assert init_resp.status_code == 200
+            challenge_id = init_resp.json()["challenge_id"]
+            bad_resp = agent_client.post(
+                "/pair/complete",
+                json={"challenge_id": challenge_id, "origin": origin, "pin": "000000"},
+                headers={"Origin": origin},
+            )
+            assert bad_resp.status_code in (403, 429)
+
+        locked_resp = agent_client.post(
+            "/pair/initiate",
+            json={"origin": origin},
+            headers={"Origin": origin},
+        )
+        assert locked_resp.status_code == 429

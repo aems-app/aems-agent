@@ -78,6 +78,32 @@ def _validate_storage(config_dir: Path) -> None:
         logger.warning("Storage path is not writable: %s", path)
 
 
+def _format_host_header_name(host: str) -> str:
+    """Return *host* normalized for direct Host header comparison."""
+    value = host.strip().lower()
+    if not value:
+        return value
+    if value.startswith("[") and value.endswith("]"):
+        return value
+    if value.count(":") >= 2:
+        return f"[{value}]"
+    return value
+
+
+def _allowed_host_headers(host: str, port: int) -> set[str]:
+    """Return the exact Host header values accepted by the local agent."""
+    allowed_names = {
+        "127.0.0.1",
+        "localhost",
+        "[::1]",
+    }
+    normalized_host = _format_host_header_name(host)
+    if normalized_host and normalized_host not in {"0.0.0.0", "[::]", "::"}:
+        allowed_names.add(normalized_host)
+
+    return {f"{name}:{port}" for name in allowed_names}
+
+
 def create_app(
     config_dir: Optional[Path] = None,
 ) -> FastAPI:
@@ -161,8 +187,23 @@ def create_app(
                             API_VERSION,
                         )
                 except (ValueError, IndexError):
-                    logger.warning("Invalid X-AEMS-Client-Version: %s", client_version)
+                        logger.warning("Invalid X-AEMS-Client-Version: %s", client_version)
             return response
+
+    class _HostHeaderMiddleware(BaseHTTPMiddleware):
+        def __init__(self, app: FastAPI, allowed_hosts: set[str]) -> None:
+            super().__init__(app)
+            self._allowed_hosts = allowed_hosts
+
+        async def dispatch(
+            self,
+            request: Request,
+            call_next: Callable[[Request], Awaitable[StarletteResponse]],
+        ) -> StarletteResponse:
+            host = request.headers.get("host", "").strip().lower()
+            if host not in self._allowed_hosts:
+                return JSONResponse(status_code=400, content={"detail": "Invalid Host header"})
+            return await call_next(request)
 
     app.add_middleware(_VersionHeaderMiddleware)
 
@@ -189,6 +230,7 @@ def create_app(
         cors_kwargs["allow_private_network"] = True
 
     app.add_middleware(CORSMiddleware, **cors_kwargs)
+    app.add_middleware(_HostHeaderMiddleware, allowed_hosts=_allowed_host_headers(config.host, config.port))
 
     # Store origins list on app.state so routes.py can append after pairing.
     app.state.cors_origins = all_origins

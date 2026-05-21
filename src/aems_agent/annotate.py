@@ -52,9 +52,9 @@ def generate_annotated_pdf(
     # If deletion failed after a source update (e.g. file locked on Windows),
     # the mtime check ensures we regenerate rather than serve stale content.
     if output_path.exists() and not force:
-        annotated_mtime = output_path.stat().st_mtime
-        source_mtime = pdf_path.stat().st_mtime
-        results_mtime = results_path.stat().st_mtime
+        annotated_mtime = output_path.stat().st_mtime_ns
+        source_mtime = pdf_path.stat().st_mtime_ns
+        results_mtime = results_path.stat().st_mtime_ns
         if annotated_mtime > source_mtime and annotated_mtime > results_mtime:
             return {
                 "status": "ok",

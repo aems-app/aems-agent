@@ -42,16 +42,17 @@ import random
 import re
 import secrets
 import shutil
+import sys
 import tempfile
 import time
 from contextlib import suppress
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, TextIO
 from urllib.parse import urlparse
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Request, Response
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel, Field, field_validator
 
 from . import annotation_crud
@@ -74,6 +75,11 @@ _rate_limiter = RateLimiter(max_requests=100, window_seconds=60.0)
 
 # Maximum upload size: 200 MB (exam PDFs can be large with images)
 _MAX_UPLOAD_BYTES = 200 * 1024 * 1024
+_MAX_JSON_BYTES = 5 * 1024 * 1024
+_PAIRING_CHALLENGE_TTL_SECONDS = 120.0
+_PAIRING_FAILURE_DETAIL = "Pairing failed"
+_PAIRING_MAX_FAILED_PINS = 5
+_PAIRING_LOCKOUT_SECONDS = 24 * 60 * 60.0
 
 # These will be set by app.py at startup
 _config_dir: Optional[Path] = None
@@ -83,6 +89,9 @@ _auth_token: Optional[str] = None
 _pairing_challenge: Optional[Dict[str, Any]] = None
 _pairing_lock = asyncio.Lock()
 _pairing_rate_limiter = RateLimiter(max_requests=6, window_seconds=60.0)
+_pairing_failed_pin_count = 0
+_pairing_failed_pin_window_started_at = 0.0
+_pairing_lockout_until = 0.0
 
 
 def set_agent_globals(config_dir: Path, auth_token: str) -> None:
@@ -166,6 +175,15 @@ def _compute_sha256(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
 
 
+def _compute_file_sha256(path: Path) -> str:
+    """Compute a SHA-256 digest without buffering the whole file in memory."""
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(64 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
 def _normalize_origin(origin: Optional[str]) -> Optional[str]:
     """
     Normalize and validate an origin string.
@@ -189,13 +207,18 @@ def _normalize_origin(origin: Optional[str]) -> Optional[str]:
         return None
     if not parsed.hostname:
         return None
+    if parsed.username is not None or parsed.password is not None:
+        return None
     if parsed.path not in ("", "/"):
         return None
     if parsed.params or parsed.query or parsed.fragment:
         return None
 
     host = parsed.hostname.lower()
-    port = parsed.port
+    try:
+        port = parsed.port
+    except ValueError:
+        return None
     return f"{parsed.scheme}://{host}:{port}" if port else f"{parsed.scheme}://{host}"
 
 
@@ -274,7 +297,10 @@ async def get_capabilities() -> Dict[str, Any]:
 
 
 @router.get("/info")
-async def info(_token: str = Depends(_verify_token)) -> Dict[str, Any]:
+async def info(
+    _token: str = Depends(_verify_token),
+    _rl: None = Depends(_check_rate_limit),
+) -> Dict[str, Any]:
     """Authenticated agent info endpoint with minimal metadata."""
     return {
         "version": AGENT_VERSION,
@@ -284,7 +310,10 @@ async def info(_token: str = Depends(_verify_token)) -> Dict[str, Any]:
 
 
 @router.get("/health")
-async def health(_token: str = Depends(_verify_token)) -> Dict[str, Any]:
+async def health(
+    _token: str = Depends(_verify_token),
+    _rl: None = Depends(_check_rate_limit),
+) -> Dict[str, Any]:
     """Authenticated health endpoint with storage diagnostics."""
     config = _get_config()
     result: Dict[str, Any] = {
@@ -398,8 +427,7 @@ async def get_submission(
     if not pdf_path.exists():
         raise HTTPException(status_code=404, detail="Submission PDF not found")
 
-    data = pdf_path.read_bytes()
-    sha256 = _compute_sha256(data)
+    sha256 = _compute_file_sha256(pdf_path)
 
     return FileResponse(
         path=str(pdf_path),
@@ -559,8 +587,7 @@ async def get_annotated(
     if not pdf_path.exists():
         raise HTTPException(status_code=404, detail="Annotated PDF not found")
 
-    data = pdf_path.read_bytes()
-    sha256 = _compute_sha256(data)
+    sha256 = _compute_file_sha256(pdf_path)
 
     return FileResponse(
         path=str(pdf_path),
@@ -648,24 +675,118 @@ def _write_json_atomic(target: Path, content: bytes) -> Dict[str, Any]:
     """
     sha = hashlib.sha256(content).hexdigest()
     target.parent.mkdir(parents=True, exist_ok=True)
-    tmp = target.with_suffix(".tmp")
+    fd, tmp_path = tempfile.mkstemp(
+        dir=str(target.parent),
+        prefix=f"{target.stem}.",
+        suffix=".tmp",
+    )
     try:
-        tmp.write_bytes(content)
-        os.replace(str(tmp), str(target))
+        with os.fdopen(fd, "wb") as handle:
+            handle.write(content)
+        os.replace(tmp_path, str(target))
     except Exception:
         with suppress(OSError):
-            tmp.unlink()
+            os.unlink(tmp_path)
         raise
     now = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
     return {"receipt": sha, "written_at": now}
 
 
+async def _read_limited_body(request: Request, max_bytes: int) -> bytes:
+    """Read a request body up to *max_bytes* and raise 413 if exceeded."""
+    content_length = request.headers.get("content-length")
+    if content_length:
+        try:
+            if int(content_length) > max_bytes:
+                raise HTTPException(
+                    status_code=413,
+                    detail=f"JSON body too large (max {max_bytes // (1024 * 1024)} MiB)",
+                )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail="Invalid Content-Length header") from exc
+
+    chunks: list[bytes] = []
+    total = 0
+    async for chunk in request.stream():
+        total += len(chunk)
+        if total > max_bytes:
+            raise HTTPException(
+                status_code=413,
+                detail=f"JSON body too large (max {max_bytes // (1024 * 1024)} MiB)",
+            )
+        chunks.append(chunk)
+    return b"".join(chunks)
+
+
 async def _read_json_body(request: Request) -> Any:
-    """Read JSON request bodies and return a 400 on malformed JSON."""
+    """Read JSON request bodies with a bounded size and a 400 on malformed JSON."""
     try:
-        return await request.json()
+        data = await _read_limited_body(request, _MAX_JSON_BYTES)
+        return json.loads(data)
     except json.JSONDecodeError as exc:
         raise HTTPException(status_code=400, detail="Malformed JSON body") from exc
+
+
+def _reset_pairing_failures() -> None:
+    """Clear failed-PIN counters after a successful or stale pairing flow."""
+    global _pairing_failed_pin_count, _pairing_failed_pin_window_started_at
+    _pairing_failed_pin_count = 0
+    _pairing_failed_pin_window_started_at = 0.0
+
+
+def _pairing_retry_after(now: float) -> int:
+    """Return retry-after seconds for an active lockout."""
+    return max(1, int(_pairing_lockout_until - now))
+
+
+def _ensure_pairing_not_locked(now: float) -> None:
+    """Reject pairing while a failed-PIN lockout is active."""
+    global _pairing_lockout_until
+    if _pairing_lockout_until and now >= _pairing_lockout_until:
+        _pairing_lockout_until = 0.0
+    if _pairing_lockout_until:
+        retry_after = _pairing_retry_after(now)
+        raise HTTPException(
+            status_code=429,
+            detail="Pairing temporarily locked",
+            headers={"Retry-After": str(retry_after)},
+        )
+
+
+def _record_failed_pin_attempt(now: float) -> bool:
+    """Track failed PIN attempts and start a lockout when the threshold is reached."""
+    global _pairing_failed_pin_count, _pairing_failed_pin_window_started_at, _pairing_lockout_until
+
+    if (
+        _pairing_failed_pin_window_started_at == 0.0
+        or (now - _pairing_failed_pin_window_started_at) >= _PAIRING_LOCKOUT_SECONDS
+    ):
+        _pairing_failed_pin_count = 0
+        _pairing_failed_pin_window_started_at = now
+
+    _pairing_failed_pin_count += 1
+    if _pairing_failed_pin_count >= _PAIRING_MAX_FAILED_PINS:
+        _pairing_lockout_until = now + _PAIRING_LOCKOUT_SECONDS
+        _reset_pairing_failures()
+        return True
+    return False
+
+
+def _maybe_echo_pairing_pin(
+    pin: str,
+    origin_header: str,
+    stdout: Optional[TextIO] = None,
+) -> bool:
+    """Echo the PIN to a terminal only when stdout is an interactive TTY."""
+    stream = stdout or sys.stdout
+    is_tty = getattr(stream, "isatty", None)
+    if not callable(is_tty) or not is_tty():
+        return False
+    print(f"\n{'=' * 40}", file=stream)
+    print(f"  PAIRING PIN: {pin}", file=stream)
+    print(f"  Origin: {origin_header}", file=stream)
+    print(f"{'=' * 40}\n", file=stream)
+    return True
 
 
 @router.put("/data/{aid}/results/{sid}.json")
@@ -1147,6 +1268,8 @@ async def pair_initiate(
     client_ip = request.client.host if request.client else "unknown"
     if not _pairing_rate_limiter.is_allowed(client_ip):
         raise HTTPException(status_code=429, detail="Too many pairing attempts")
+    now = time.time()
+    _ensure_pairing_not_locked(now)
 
     origin_header = _normalize_origin(request.headers.get("origin"))
     origin_body = _normalize_origin(body.origin)
@@ -1160,20 +1283,22 @@ async def pair_initiate(
     pin = f"{random.SystemRandom().randint(0, 999999):06d}"
 
     async with _pairing_lock:
+        if _pairing_challenge and now <= float(_pairing_challenge["expires_at"]):
+            expires_in = max(1, int(float(_pairing_challenge["expires_at"]) - now))
+            return JSONResponse(
+                status_code=409,
+                content={"detail": "Pairing already in progress", "expires_in": expires_in},
+            )
         _pairing_challenge = {
             "challenge_id": challenge_id,
             "origin": origin_header,
             "pin": pin,
-            "created_at": time.time(),
-            "expires_at": time.time() + 120,
+            "created_at": now,
+            "expires_at": now + _PAIRING_CHALLENGE_TTL_SECONDS,
         }
 
-    # Print PIN to console for operator confirmation
     logger.debug("Pairing PIN generated (origin: %s)", origin_header)
-    print(f"\n{'=' * 40}")
-    print(f"  PAIRING PIN: {pin}")
-    print(f"  Origin: {origin_header}")
-    print(f"{'=' * 40}\n")
+    _maybe_echo_pairing_pin(pin, origin_header)
 
     # Put the PIN on the OS clipboard so the user can paste it directly
     # into the AEMS web UI -- the tray toast is non-interactive, so there
@@ -1186,7 +1311,7 @@ async def pair_initiate(
     return {
         "challenge_id": challenge_id,
         "agent_name": f"AEMS Agent ({config.host}:{config.port})",
-        "expires_in": 120,
+        "expires_in": int(_PAIRING_CHALLENGE_TTL_SECONDS),
         "requires_pin": True,
     }
 
@@ -1208,45 +1333,45 @@ async def pair_complete(
     client_ip = request.client.host if request.client else "unknown"
     if not _pairing_rate_limiter.is_allowed(client_ip):
         raise HTTPException(status_code=429, detail="Too many pairing attempts")
+    now = time.time()
+    _ensure_pairing_not_locked(now)
 
     origin_header = _normalize_origin(request.headers.get("origin"))
     origin_body = _normalize_origin(body.origin)
     if not origin_header or not origin_body:
-        async with _pairing_lock:
-            _pairing_challenge = None
-        raise HTTPException(status_code=400, detail="Invalid origin")
+        raise HTTPException(status_code=403, detail=_PAIRING_FAILURE_DETAIL)
     if not secrets.compare_digest(origin_header, origin_body):
-        async with _pairing_lock:
-            _pairing_challenge = None
-        raise HTTPException(status_code=403, detail="Origin header mismatch")
+        raise HTTPException(status_code=403, detail=_PAIRING_FAILURE_DETAIL)
 
     async with _pairing_lock:
         if not _pairing_challenge:
-            raise HTTPException(status_code=400, detail="No active pairing challenge")
+            raise HTTPException(status_code=403, detail=_PAIRING_FAILURE_DETAIL)
 
         # Check expiry
-        if time.time() > _pairing_challenge["expires_at"]:
+        if now > float(_pairing_challenge["expires_at"]):
             _pairing_challenge = None
+            _reset_pairing_failures()
             raise HTTPException(status_code=410, detail="Pairing challenge expired")
 
         # Validate challenge ID (constant-time comparison)
         if not secrets.compare_digest(body.challenge_id, _pairing_challenge["challenge_id"]):
-            _pairing_challenge = None
-            raise HTTPException(status_code=403, detail="Invalid challenge ID")
+            raise HTTPException(status_code=403, detail=_PAIRING_FAILURE_DETAIL)
 
         # Bind completion to the same browser origin that initiated pairing.
         expected_origin = str(_pairing_challenge.get("origin") or "")
         if not secrets.compare_digest(origin_header, expected_origin):
-            _pairing_challenge = None
-            raise HTTPException(status_code=403, detail="Origin mismatch for pairing challenge")
+            raise HTTPException(status_code=403, detail=_PAIRING_FAILURE_DETAIL)
 
         # Validate PIN (constant-time comparison)
         if not secrets.compare_digest(body.pin, _pairing_challenge["pin"]):
             _pairing_challenge = None
-            raise HTTPException(status_code=403, detail="Invalid PIN")
+            if _record_failed_pin_attempt(now):
+                raise HTTPException(status_code=429, detail="Pairing temporarily locked")
+            raise HTTPException(status_code=403, detail=_PAIRING_FAILURE_DETAIL)
 
         # Consume the challenge (single-use)
         _pairing_challenge = None
+        _reset_pairing_failures()
 
     # Add origin to paired_origins, persist, and update live CORS list
     config = _get_config()
@@ -1272,16 +1397,17 @@ async def pair_confirm() -> Dict[str, Any]:
     Note: no _pairing_lock needed — asyncio single-threaded event loop
     provides atomicity between await points, and this handler has none.
     """
-    if not _pairing_challenge:
+    challenge = _pairing_challenge
+    if not challenge:
         return {"active": False}
 
     now = time.time()
-    if now > _pairing_challenge["expires_at"]:
+    if now > float(challenge["expires_at"]):
         return {"active": False}
 
     return {
         "active": True,
-        "expires_in": int(_pairing_challenge["expires_at"] - now),
+        "expires_in": int(float(challenge["expires_at"]) - now),
     }
 
 
@@ -1289,7 +1415,8 @@ def _copy_pin_to_clipboard(pin: str) -> bool:
     """Best-effort: place the pairing PIN on the OS clipboard.
 
     Returns True if the clipboard was updated, False otherwise.  Failure
-    is silent -- the PIN is still in the tray toast and on stdout.
+    is silent -- the PIN is still in the tray toast and may also be echoed
+    to an interactive terminal.
     """
     import platform
     import subprocess

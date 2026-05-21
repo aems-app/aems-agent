@@ -16,7 +16,9 @@ import logging
 import os
 import re
 import secrets
+import tempfile
 import time
+from contextlib import suppress
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Optional
@@ -212,9 +214,19 @@ async def download_submissions(
 
             # Atomic write: temp file then os.replace
             target_dir.mkdir(parents=True, exist_ok=True)
-            tmp = target_file.with_suffix(".tmp")
-            tmp.write_bytes(content)
-            os.replace(str(tmp), str(target_file))
+            fd, tmp_path = tempfile.mkstemp(
+                dir=str(target_dir),
+                prefix="submission.",
+                suffix=".tmp",
+            )
+            try:
+                with os.fdopen(fd, "wb") as handle:
+                    handle.write(content)
+                os.replace(tmp_path, str(target_file))
+            except Exception:
+                with suppress(OSError):
+                    os.unlink(tmp_path)
+                raise
 
             # Remove stale annotated PDF after source replacement
             annotated_path = target_dir / "submission_annotated.pdf"
