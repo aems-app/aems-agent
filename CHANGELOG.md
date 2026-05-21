@@ -2,7 +2,9 @@
 
 All notable changes to `aems-agent` are recorded here. Format follows [Keep a Changelog](https://keepachangelog.com/) and the project uses [SemVer](https://semver.org/).
 
-## Unreleased
+## 0.3.7 — 2026-05-21
+
+Security hardening of the local-bridge surface, plus reliability fixes on the file-IO and CRUD paths. All changes are local to the agent and require no AEMS server-side update.
 
 ### Security
 
@@ -17,6 +19,10 @@ All notable changes to `aems-agent` are recorded here. Format follows [Keep a Ch
 - **PDF download hashing no longer buffers the whole file in memory.** `/files/{aid}/{sid}` and `/files/{aid}/{sid}/annotated` now compute SHA-256 headers incrementally.
 - **Annotated-PDF cache freshness now uses nanosecond mtimes.** This avoids same-second cache reuse on fast file updates.
 - **Annotation CRUD responses now round-trip rect coordinates back in PDF space.** The agent converts rects back from PyMuPDF space before returning them to the browser/UI.
+
+### Note
+
+This release tags the work that landed in `master` commit `d943780` (`Harden local agent pairing and request handling`) plus the file-IO follow-ups, all of which were in the `Unreleased` section since the `0.3.6` release on 2026-05-17. The wire-level pair / file / data routes are byte-compatible with 0.3.6; existing paired tokens stay valid across upgrade.
 
 ## 0.3.6 — 2026-05-17
 
