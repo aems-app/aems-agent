@@ -10,6 +10,7 @@ Commands:
     aems-agent config-dir                                        - Show config directory
 """
 
+import os
 import signal
 import sys
 from pathlib import Path
@@ -17,6 +18,54 @@ from typing import Any, Optional
 
 import typer
 from fastapi import FastAPI
+
+
+def _ensure_stdio_streams() -> None:
+    """Provide non-None stdio streams for windowed PyInstaller bundles.
+
+    When the agent is launched from a URI handler or other GUI shell context,
+    PyInstaller's windowed (``--noconsole``) mode sets ``sys.stdout`` and
+    ``sys.stderr`` to ``None``. Downstream libraries (notably uvicorn's
+    ``ColourizedFormatter`` which calls ``sys.stdout.isatty()``) then crash
+    during logging configuration. Substituting a sink that satisfies the
+    file-like protocol — ``isatty`` always False, ``write``/``flush`` no-ops
+    — keeps the rest of the stack working without trying to redirect output
+    anywhere users will see it.
+
+    Idempotent and safe to call from any entrypoint.
+    """
+
+    class _NullStream:
+        encoding = "utf-8"
+        errors = "replace"
+
+        def write(self, _data: str) -> int:
+            return 0
+
+        def flush(self) -> None:
+            return None
+
+        def isatty(self) -> bool:
+            return False
+
+        def fileno(self) -> int:  # noqa: D401 - file-like protocol
+            raise OSError("no fileno for null stdio stream")
+
+        def close(self) -> None:
+            return None
+
+    if sys.stdout is None:
+        sys.stdout = _NullStream()  # type: ignore[assignment]
+    if sys.stderr is None:
+        sys.stderr = _NullStream()  # type: ignore[assignment]
+    if sys.stdin is None:
+        sys.stdin = _NullStream()  # type: ignore[assignment]
+
+
+# Apply at import time so anything in the dependency tree that reaches for
+# sys.stdout during its own import (uvicorn's logging config does this when
+# instantiated) sees a usable stream.
+_ensure_stdio_streams()
 
 from .config import (
     AGENT_VERSION,

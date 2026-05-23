@@ -52,3 +52,38 @@ def test_config_dir_command(
     assert str(tmp_path) in result.output
 
 
+
+
+def test_ensure_stdio_streams_substitutes_none(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Windowed PyInstaller bundles set sys.stdout=None; verify we patch it.
+
+    Reproduces the v0.4.0 URI-launch crash (uvicorn ColourizedFormatter calls
+    sys.stdout.isatty() during logging config and trips AttributeError).
+    """
+    monkeypatch.setattr(sys, "stdout", None)
+    monkeypatch.setattr(sys, "stderr", None)
+
+    cli_module._ensure_stdio_streams()
+
+    assert sys.stdout is not None
+    assert sys.stderr is not None
+    assert sys.stdout.isatty() is False
+    assert sys.stderr.isatty() is False
+    # write/flush are no-ops that don't raise
+    sys.stdout.write("ignored")
+    sys.stdout.flush()
+    sys.stderr.write("ignored")
+    sys.stderr.flush()
+
+
+def test_ensure_stdio_streams_idempotent_when_streams_exist(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Don't clobber the real streams when they're already valid."""
+    cli_module._ensure_stdio_streams()
+    # The real (or pytest-captured) stream should still be in place.
+    print("hello", flush=True)
+    captured = capsys.readouterr()
+    assert "hello" in captured.out

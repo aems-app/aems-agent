@@ -14,7 +14,7 @@ import logging
 import threading
 import webbrowser
 from pathlib import Path
-from typing import Any
+from typing import Any, Optional
 
 from .icons import RUNTIME_ICON_SIZE, render_status_icon
 
@@ -74,9 +74,29 @@ def create_tray(config_dir: Path) -> Any:
 
     def on_open_settings(icon: Any, item: Any) -> None:
         cfg = load_config(config_dir)
-        # Build URL from config; default AEMS web on same host, port 8080
-        aems_host = cfg.host if cfg.host != "0.0.0.0" else "127.0.0.1"
-        webbrowser.open(f"http://{aems_host}:8080/settings#privacy")
+        # Prefer the AEMS instance the user has actually paired with: a hosted
+        # https origin takes priority (api.aems.app is the canonical hosted
+        # deployment), then any other paired origin, then any non-localhost
+        # allowed origin, then the legacy http://127.0.0.1:8080 fallback for
+        # local-only AEMS dev setups. Hard-coding port 8080 was wrong for
+        # everyone running against the hosted app.
+        target_url: Optional[str] = None
+        candidates = list(cfg.paired_origins) + list(cfg.allowed_origins)
+        # Hosted https first
+        for origin in candidates:
+            if origin.startswith("https://"):
+                target_url = origin.rstrip("/") + "/settings#privacy"
+                break
+        # Then any other paired origin
+        if not target_url:
+            for origin in cfg.paired_origins:
+                target_url = origin.rstrip("/") + "/settings#privacy"
+                break
+        # Fall back to local AEMS dev convention
+        if not target_url:
+            aems_host = cfg.host if cfg.host != "0.0.0.0" else "127.0.0.1"
+            target_url = f"http://{aems_host}:8080/settings#privacy"
+        webbrowser.open(target_url)
 
     def on_set_folder(icon: Any, item: Any) -> None:
         _open_folder_picker(config_dir)
