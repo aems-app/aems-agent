@@ -158,7 +158,7 @@ def run_icon_safely(icon: Any, app: Any | None = None) -> None:
     """
     try:
         icon.run()
-    except Exception as e:  # pragma: no cover - exercised in test via mock
+    except Exception as e:
         logger.error("Tray icon failed: %s", e, exc_info=True)
         if app is not None and hasattr(app, "state"):
             app.state.tray_status = "failed"
