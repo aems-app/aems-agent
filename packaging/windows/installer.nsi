@@ -24,6 +24,19 @@ RequestExecutionLevel user
 !insertmacro MUI_PAGE_WELCOME
 !insertmacro MUI_PAGE_DIRECTORY
 !insertmacro MUI_PAGE_INSTFILES
+
+; --- Finish page: offer to start the agent + open AEMS settings ---
+!define MUI_FINISHPAGE_RUN "$INSTDIR\aems-agent.exe"
+!define MUI_FINISHPAGE_RUN_PARAMETERS "run --tray"
+!define MUI_FINISHPAGE_RUN_TEXT "Start AEMS Agent now (recommended)"
+; (default-checked; remove the next line to require opt-in)
+; !define MUI_FINISHPAGE_RUN_NOTCHECKED
+
+!define MUI_FINISHPAGE_SHOWREADME ""
+!define MUI_FINISHPAGE_SHOWREADME_NOTCHECKED
+!define MUI_FINISHPAGE_SHOWREADME_TEXT "Open the AEMS settings in your browser"
+!define MUI_FINISHPAGE_SHOWREADME_FUNCTION OpenAemsSettings
+
 !insertmacro MUI_PAGE_FINISH
 
 ; Uninstaller pages
@@ -70,6 +83,13 @@ Section "Install"
 
     ; Save install dir
     WriteRegStr HKCU "Software\AEMS Agent" "InstallDir" "$INSTDIR"
+
+    ; Register aems-agent:// custom URI protocol (per-user)
+    WriteRegStr HKCU "Software\Classes\aems-agent" "" "URL:AEMS Agent Launch Protocol"
+    WriteRegStr HKCU "Software\Classes\aems-agent" "URL Protocol" ""
+    WriteRegStr HKCU "Software\Classes\aems-agent\DefaultIcon" "" '"$INSTDIR\aems-agent.exe",1'
+    WriteRegStr HKCU "Software\Classes\aems-agent\shell\open\command" "" \
+        '"$INSTDIR\aems-agent.exe" run --tray --launch-from-uri "%1"'
 SectionEnd
 
 ; Uninstaller section
@@ -86,4 +106,9 @@ Section "Uninstall"
     ; Remove registry entries
     DeleteRegKey HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\AEMS Agent"
     DeleteRegKey HKCU "Software\AEMS Agent"
+    DeleteRegKey HKCU "Software\Classes\aems-agent"
 SectionEnd
+
+Function OpenAemsSettings
+    ExecShell "open" "https://api.aems.app/settings/#privacy"
+FunctionEnd

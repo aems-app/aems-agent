@@ -73,6 +73,11 @@ def run(
     port: int = typer.Option(61234, "--port", "-p", help="Port to listen on"),
     host: str = typer.Option("127.0.0.1", "--host", "-h", help="Host to bind to"),
     tray: bool = typer.Option(False, "--tray", help="Show system tray icon"),
+    launch_from_uri: Optional[str] = typer.Option(
+        None,
+        "--launch-from-uri",
+        help="Internal: launched via aems-agent:// protocol handler. The full URI is passed as the value.",
+    ),
 ) -> None:
     """Start the AEMS Local Bridge Agent."""
     try:
@@ -83,6 +88,9 @@ def run(
             err=True,
         )
         raise typer.Exit(1)
+
+    if launch_from_uri:
+        typer.echo(f"Agent launched via URI: {launch_from_uri}")
 
     _setup_signal_handlers()
 
