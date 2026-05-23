@@ -975,6 +975,95 @@ class TestCORSDynamicOrigins:
         assert resp.headers.get("access-control-allow-origin") == origin
         assert resp.headers.get("access-control-allow-private-network") == "true"
 
+    def _pair_origin(self, agent_client: Any, origin: str) -> None:
+        """Helper: run the full pair-initiate/complete handshake so the
+        given origin lands in the live cors_origins list."""
+        _reset_pairing_rate_limiters()
+        init_resp = agent_client.post(
+            "/pair/initiate",
+            json={"origin": origin},
+            headers={"Origin": origin},
+        )
+        assert init_resp.status_code == 200
+        challenge_id = init_resp.json()["challenge_id"]
+        from aems_agent import routes
+        pin = routes._pairing_challenge["pin"]
+        complete_resp = agent_client.post(
+            "/pair/complete",
+            json={"challenge_id": challenge_id, "origin": origin, "pin": pin},
+            headers={"Origin": origin},
+        )
+        assert complete_resp.status_code == 200
+
+    def test_private_network_preflight_from_hosted_origin(self, agent_client: Any) -> None:
+        """Chrome PNA preflight from a hosted (non-loopback) origin must echo
+        Access-Control-Allow-Private-Network: true.
+
+        Regression for the 2026-05-23 hosted-to-agent breakage: bundled
+        Starlette 0.45+ dropped the allow_private_network kwarg, so the
+        _LNAAllowMiddleware in app.py is the only thing that injects the
+        header. Without it, real Chrome blocks every fetch from
+        https://api.aems.app to http://127.0.0.1:61234.
+        """
+        _skip_if_no_fastapi()
+        origin = "https://api.aems.app"
+        self._pair_origin(agent_client, origin)
+        resp = agent_client.options(
+            "/status",
+            headers={
+                "Origin": origin,
+                "Access-Control-Request-Method": "GET",
+                "Access-Control-Request-Headers": "authorization",
+                "Access-Control-Request-Private-Network": "true",
+            },
+        )
+        assert resp.status_code == 200
+        assert resp.headers.get("access-control-allow-origin") == origin
+        assert resp.headers.get("access-control-allow-private-network") == "true"
+
+    def test_local_network_preflight_from_hosted_origin(self, agent_client: Any) -> None:
+        """Chrome LNA (post-PNA naming) sends Access-Control-Request-Local-Network;
+        the agent must echo Access-Control-Allow-Local-Network: true."""
+        _skip_if_no_fastapi()
+        origin = "https://api.aems.app"
+        self._pair_origin(agent_client, origin)
+        resp = agent_client.options(
+            "/status",
+            headers={
+                "Origin": origin,
+                "Access-Control-Request-Method": "GET",
+                "Access-Control-Request-Headers": "authorization",
+                "Access-Control-Request-Local-Network": "true",
+            },
+        )
+        assert resp.status_code == 200
+        assert resp.headers.get("access-control-allow-origin") == origin
+        assert resp.headers.get("access-control-allow-local-network") == "true"
+
+    def test_options_without_lna_request_does_not_inject_allow_header(
+        self, agent_client: Any
+    ) -> None:
+        """If the browser did not request PNA/LNA, do not inject the allow header.
+        Sending it unconditionally would be harmless but is wasteful and noisy."""
+        _skip_if_no_fastapi()
+        origin = "https://api.aems.app"
+        self._pair_origin(agent_client, origin)
+        resp = agent_client.options(
+            "/status",
+            headers={
+                "Origin": origin,
+                "Access-Control-Request-Method": "GET",
+                "Access-Control-Request-Headers": "authorization",
+            },
+        )
+        assert resp.status_code == 200
+        assert "access-control-allow-private-network" not in {
+            k.lower() for k in resp.headers.keys()
+        }
+        assert "access-control-allow-local-network" not in {
+            k.lower() for k in resp.headers.keys()
+        }
+
 
 # ---------------------------------------------------------------------------
 # Test Gap 2: _normalize_origin edge cases
