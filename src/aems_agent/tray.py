@@ -142,6 +142,29 @@ def create_tray(config_dir: Path) -> Any:
     return icon
 
 
+def run_icon_safely(icon: Any, app: Any | None = None) -> None:
+    """Run pystray's icon, capture failures so /status can surface them.
+
+    The icon.run() call blocks the daemon thread until stop() is called.
+    Without this wrapper, any exception inside the thread vanishes silently
+    and the agent reports tray status as 'running' forever — even though
+    no icon ever appeared in the system tray (audit defect #3).
+
+    Args:
+        icon: A configured pystray Icon (returned by ``create_tray``).
+        app: Optional FastAPI app whose ``state.tray_status`` will be
+            updated to ``"failed"`` (with ``state.tray_error`` capturing
+            the exception message) when ``icon.run()`` raises.
+    """
+    try:
+        icon.run()
+    except Exception as e:  # pragma: no cover - exercised in test via mock
+        logger.error("Tray icon failed: %s", e, exc_info=True)
+        if app is not None and hasattr(app, "state"):
+            app.state.tray_status = "failed"
+            app.state.tray_error = str(e)
+
+
 def start_tray_thread(config_dir: Path) -> threading.Thread:
     """
     Start the system tray in a background daemon thread.
@@ -154,7 +177,9 @@ def start_tray_thread(config_dir: Path) -> threading.Thread:
     """
     icon = create_tray(config_dir)
 
-    thread = threading.Thread(target=icon.run, daemon=True, name="aems-tray")
+    thread = threading.Thread(
+        target=run_icon_safely, args=(icon,), daemon=True, name="aems-tray"
+    )
     thread.start()
 
     return thread

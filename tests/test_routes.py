@@ -1137,7 +1137,18 @@ class TestStatusExactFields:
         resp = agent_client.get("/status")
         assert resp.status_code == 200
         data = resp.json()
-        expected_keys = {"status", "service", "version", "api_version", "min_client_version"}
+        # tray_status/tray_error were added so the AEMS web Settings badge can
+        # warn when the agent serves /status but the tray icon never appeared
+        # (audit defect #3).
+        expected_keys = {
+            "status",
+            "service",
+            "version",
+            "api_version",
+            "min_client_version",
+            "tray_status",
+            "tray_error",
+        }
         assert set(data.keys()) == expected_keys
 
 

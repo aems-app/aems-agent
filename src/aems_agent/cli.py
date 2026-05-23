@@ -125,9 +125,19 @@ def run(
 
 
 def _start_tray(config_dir: Path, agent_app: Optional[FastAPI] = None) -> None:
-    """Start the system tray icon in a background thread."""
+    """Start the system tray icon in a background thread.
+
+    Sets ``agent_app.state.tray_status`` so the agent's ``/status`` endpoint
+    can surface tray health to the AEMS web Settings badge.  Transitions:
+
+    * ``"starting"`` — icon constructed, daemon thread about to start.
+    * ``"running"`` — daemon thread launched (no exception synchronously).
+    * ``"failed"`` — exception raised either during setup or inside the
+      daemon thread (the latter is captured by ``run_icon_safely``).
+    * ``"unavailable"`` — ``pystray`` not installed.
+    """
     try:
-        from .tray import create_tray
+        from .tray import create_tray, run_icon_safely
 
         import threading
 
@@ -138,15 +148,34 @@ def _start_tray(config_dir: Path, agent_app: Optional[FastAPI] = None) -> None:
         if notifier is not None and agent_app is not None:
             agent_app.state.tray_notifier = notifier
 
-        thread = threading.Thread(target=icon.run, daemon=True, name="aems-tray")
+        if agent_app is not None:
+            agent_app.state.tray_status = "starting"
+            agent_app.state.tray_error = None
+
+        thread = threading.Thread(
+            target=run_icon_safely,
+            args=(icon, agent_app),
+            daemon=True,
+            name="aems-tray",
+        )
         thread.start()
+
+        if agent_app is not None:
+            agent_app.state.tray_status = "running"
+
         typer.echo("  System tray: enabled")
     except ImportError:
+        if agent_app is not None:
+            agent_app.state.tray_status = "unavailable"
+            agent_app.state.tray_error = "pystray not installed"
         typer.echo(
             "  System tray: unavailable (install pystray: pip install pystray pillow)",
             err=True,
         )
     except Exception as e:
+        if agent_app is not None:
+            agent_app.state.tray_status = "failed"
+            agent_app.state.tray_error = str(e)
         typer.echo(f"  System tray: failed to start ({e})", err=True)
 
 
