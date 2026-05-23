@@ -256,14 +256,27 @@ class FileInfo(BaseModel):
 
 
 @router.get("/status")
-async def status() -> Dict[str, Any]:
-    """Alive check - no authentication required. Minimal info only."""
+async def status(request: Request) -> Dict[str, Any]:
+    """Alive check - no authentication required. Minimal info only.
+
+    Includes ``tray_status`` so the AEMS web Settings badge can warn
+    users when the agent is running but the tray icon failed to appear
+    (audit defect #3). ``tray_status`` is one of:
+
+    * ``"unknown"``  — tray was never started this session (default).
+    * ``"starting"`` — icon constructed, daemon thread launching.
+    * ``"running"``  — daemon thread launched without immediate failure.
+    * ``"failed"``   — exception during setup or inside ``icon.run()``.
+    * ``"unavailable"`` — ``pystray`` package not installed.
+    """
     return {
         "status": "ok",
         "service": "aems-agent",
         "version": AGENT_VERSION,
         "api_version": API_VERSION,
         "min_client_version": MIN_CLIENT_API_VERSION,
+        "tray_status": getattr(request.app.state, "tray_status", "unknown"),
+        "tray_error": getattr(request.app.state, "tray_error", None),
     }
 
 
