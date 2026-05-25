@@ -565,6 +565,42 @@ class TestPairing:
         assert "token" in payload
         assert payload["token"]
 
+    def test_pair_initiate_returns_configured_storage_path(
+        self,
+        agent_client: Any,
+        tmp_storage_path: Path,
+    ) -> None:
+        _skip_if_no_fastapi()
+        _reset_pairing_rate_limiters()
+        origin = "http://127.0.0.1:8080"
+
+        resp = agent_client.post(
+            "/pair/initiate",
+            json={"origin": origin},
+            headers={"Origin": origin},
+        )
+
+        assert resp.status_code == 200
+        assert resp.json()["storage_path"] == str(tmp_storage_path)
+
+    def test_pair_initiate_returns_null_storage_path_when_unconfigured(
+        self,
+        agent_client_no_storage: Any,
+    ) -> None:
+        _skip_if_no_fastapi()
+        _reset_pairing_rate_limiters()
+        origin = "http://127.0.0.1:8080"
+
+        resp = agent_client_no_storage.post(
+            "/pair/initiate",
+            json={"origin": origin},
+            headers={"Origin": origin},
+        )
+
+        assert resp.status_code == 200
+        assert "storage_path" in resp.json()
+        assert resp.json()["storage_path"] is None
+
     def test_pair_rejects_origin_mismatch(self, agent_client: Any) -> None:
         _skip_if_no_fastapi()
         _reset_pairing_rate_limiters()

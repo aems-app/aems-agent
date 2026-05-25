@@ -11,6 +11,8 @@ Requires: pystray, pillow (PIL)
 """
 
 import logging
+import platform
+import subprocess
 import threading
 import webbrowser
 from pathlib import Path
@@ -26,22 +28,86 @@ def _create_icon_image(color: str = "green") -> Any:
     return render_status_icon(color, size=RUNTIME_ICON_SIZE)
 
 
+def _pick_folder_windows() -> Optional[str]:
+    """Use a dedicated STA PowerShell process for the Windows folder picker.
+
+    Tk dialogs launched from the tray callback thread are unreliable on
+    Windows; users can get a folder window that won't close or confirm.
+    Launching the picker in a separate GUI-capable process avoids that
+    thread-affinity problem and lets upgrades keep the agent itself
+    windowless.
+    """
+    script = r"""
+[Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+Add-Type -AssemblyName System.Windows.Forms
+$dialog = New-Object System.Windows.Forms.FolderBrowserDialog
+$dialog.Description = 'Select AEMS Exam Storage Folder'
+$dialog.ShowNewFolderButton = $true
+if ($dialog.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) {
+    Write-Output $dialog.SelectedPath
+}
+"""
+    try:
+        completed = subprocess.run(
+            [
+                "powershell",
+                "-NoProfile",
+                "-NonInteractive",
+                "-STA",
+                "-ExecutionPolicy",
+                "Bypass",
+                "-Command",
+                script,
+            ],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            timeout=120,
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError) as exc:
+        logger.warning("Windows folder picker process failed: %s", exc)
+        return None
+
+    if completed.returncode != 0:
+        logger.warning(
+            "Windows folder picker exited with %s: %s",
+            completed.returncode,
+            (completed.stderr or "").strip(),
+        )
+        return None
+
+    return completed.stdout.strip()
+
+
+def _pick_folder_tk() -> Optional[str]:
+    """Fallback cross-platform folder picker."""
+    import tkinter as tk
+    from tkinter import filedialog
+
+    root = tk.Tk()
+    root.withdraw()
+    root.attributes("-topmost", True)
+    root.update_idletasks()
+    folder = filedialog.askdirectory(
+        title="Select AEMS Exam Storage Folder",
+        mustexist=False,
+        parent=root,
+    )
+    root.destroy()
+    return folder or None
+
+
 def _open_folder_picker(config_dir: Path) -> None:
     """Open a native folder picker dialog to set the storage path."""
     try:
-        import tkinter as tk
-        from tkinter import filedialog
-
-        root = tk.Tk()
-        root.withdraw()
-        root.attributes("-topmost", True)
-
-        folder = filedialog.askdirectory(
-            title="Select AEMS Exam Storage Folder",
-            mustexist=False,
-        )
-
-        root.destroy()
+        folder: Optional[str]
+        if platform.system() == "Windows":
+            folder = _pick_folder_windows()
+            if folder is None:
+                folder = _pick_folder_tk()
+        else:
+            folder = _pick_folder_tk()
 
         if folder:
             from .config import load_config, save_config

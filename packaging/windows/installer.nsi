@@ -50,6 +50,12 @@ RequestExecutionLevel user
 Section "Install"
     SetOutPath "$INSTDIR"
 
+    ; Stop any running agent so upgrades can replace aems-agent.exe instead
+    ; of failing with "Error opening file for writing".
+    DetailPrint "Stopping running AEMS Agent instances..."
+    nsExec::ExecToLog 'cmd /c taskkill /IM aems-agent.exe /T /F >nul 2>&1'
+    Sleep 1000
+
     ; Copy all files from PyInstaller dist
     File /r "${DIST_DIR}\*.*"
 
@@ -94,6 +100,11 @@ SectionEnd
 
 ; Uninstaller section
 Section "Uninstall"
+    ; Best-effort stop before removing the installed files.
+    DetailPrint "Stopping running AEMS Agent instances..."
+    nsExec::ExecToLog 'cmd /c taskkill /IM aems-agent.exe /T /F >nul 2>&1'
+    Sleep 1000
+
     ; Remove startup entry
     DeleteRegValue HKCU "Software\Microsoft\Windows\CurrentVersion\Run" "AEMS Agent"
 

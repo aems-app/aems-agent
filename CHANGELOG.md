@@ -2,6 +2,19 @@
 
 All notable changes to `aems-agent` are recorded here. Format follows [Keep a Changelog](https://keepachangelog.com/) and the project uses [SemVer](https://semver.org/).
 
+## 0.4.3 — 2026-05-25
+
+Reliability hotfix for the desktop-agent path. A first-time tester (Zohar) hit a chain of issues during his prod run: the tray's "Set Storage Folder" dialog refused to close on Windows, in-place upgrades failed with `Error opening file for writing` because the running `aems-agent.exe` was locked, and once the agent shipped without a storage folder configured every PUT to `/files/*` returned an opaque `503` "Storage path not configured" that the web UI could not preempt.
+
+### Fixed
+
+- **Windows tray folder picker now runs in a dedicated STA PowerShell process.** Tk dialogs launched from the pystray callback thread are unreliable on Windows — users can land in a folder window that refuses to confirm or close. The picker is now `[System.Windows.Forms.FolderBrowserDialog]` invoked through `powershell -STA`, which has its own message pump and process lifetime. The Tk implementation remains as a cross-platform fallback for macOS/Linux.
+- **The Windows installer now stops a running agent before copying files.** `aems-agent.exe` is killed with `taskkill /IM aems-agent.exe /T /F` at the start of both install and uninstall sections. Without this, upgrades on top of a tray-resident v0.4.0/v0.4.1/v0.4.2 silently failed at write time and the user had to open Task Manager. Note: this is intentionally a hard-kill — the agent has no critical async state to flush.
+
+### Added
+
+- **`POST /pair/initiate` now returns `storage_path`** alongside the existing `challenge_id` / `agent_name` / `expires_in` / `requires_pin` fields. The AEMS web pairing UI already reads this field; previously it was always `undefined`, which meant the "Pairing cannot continue: no storage folder set" gate could never trigger and users would only discover the misconfiguration much later at upload time. The value is the literal `storage_path` from the agent's config — `null` when unconfigured.
+
 ## 0.4.2 — 2026-05-25
 
 Reliability hotfix. A first-time Personal-plan tester (Zohar) hit two blocking issues during his prod run today; both are fixed here.
