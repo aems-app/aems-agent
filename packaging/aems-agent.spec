@@ -42,6 +42,13 @@ a = Analysis(
             str(PROJECT_ROOT / 'src' / 'aems_agent' / '_version.txt'),
             'aems_agent',
         ),
+        # AEMS brand glyph used by the tray icon renderer (icons.py).
+        # Without this entry the bundled tray icon falls back to a missing
+        # asset error at first render.
+        (
+            str(PROJECT_ROOT / 'src' / 'aems_agent' / 'assets' / 'aems-logo-mask.png'),
+            'aems_agent/assets',
+        ),
     ],
     hiddenimports=[
         'uvicorn.logging',

@@ -2,6 +2,19 @@
 
 All notable changes to `aems-agent` are recorded here. Format follows [Keep a Changelog](https://keepachangelog.com/) and the project uses [SemVer](https://semver.org/).
 
+## 0.4.6 — 2026-05-25
+
+Tray + Windows icon now uses the AEMS brand glyph (the "A" mark from the aems.app website / aems-web favicon) tinted by status, instead of the generic green-checkmark badge it shipped with from 0.3.x onward.
+
+### Changed
+
+- **Tray / taskbar icon shows the AEMS glyph in white on a status-coloured rounded-rectangle badge.** Green = running with storage configured, yellow = running but no storage path set, red = unreachable / error. The shape and status-colour mapping are preserved; only the foreground glyph changed from a generic checkmark to the brand glyph. Same renderer drives the multi-resolution Windows `.ico` (16/20/24/32/40/48/64/128/256), so Start menu / taskbar / Alt-Tab thumbnails all match.
+
+### Internal
+
+- New `src/aems_agent/assets/` package shipping `aems-logo-mask.png` (512×512 rasterised AEMS-website favicon). `icons.py` loads only the alpha channel and composites it over the badge, so future re-colourings stay one-line edits.
+- PyInstaller spec extended with the asset entry so frozen builds bundle the mask.
+
 ## 0.4.5 — 2026-05-25
 
 Follow-up to the 0.4.3/0.4.4 tray folder-picker chain.

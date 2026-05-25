@@ -1,9 +1,24 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 
-"""Shared icon rendering for the AEMS Local Bridge Agent."""
+"""Shared icon rendering for the AEMS Local Bridge Agent.
+
+The tray / Windows icon is rendered as a rounded-rectangle badge in the
+current status colour (green = running with storage, yellow = running
+without storage, red = error / unreachable) with the AEMS brand glyph
+overlaid in white.
+
+The glyph mask is the AEMS website favicon rasterised at 512x512 and
+shipped as ``assets/aems-logo-mask.png``. We load only its alpha
+channel, resize to the requested target size, and use it to stamp
+white onto the coloured badge. This keeps the icon visually consistent
+with ``aems-website`` / ``aems-web`` while still letting the status
+colour communicate state at-a-glance in the tray.
+"""
 
 from __future__ import annotations
 
+from functools import lru_cache
+from importlib import resources
 from pathlib import Path
 from typing import Any
 
@@ -15,15 +30,56 @@ STATUS_COLORS: dict[str, tuple[int, int, int, int]] = {
 RUNTIME_ICON_SIZE = 64
 WINDOWS_ICON_SIZES: tuple[int, ...] = (16, 20, 24, 32, 40, 48, 64, 128, 256)
 
+# The glyph occupies ~75% of the favicon viewBox. Inset the rendered
+# mask further inside the badge so it doesn't kiss the rounded edges.
+_GLYPH_INSET_RATIO = 0.18
+
+# Pre-rendered SVG at 512x512 — high enough that downscaling to 16x16
+# tray icons stays crisp under Pillow's LANCZOS resampler.
+_LOGO_MASK_FILENAME = "aems-logo-mask.png"
+
+
+@lru_cache(maxsize=1)
+def _load_logo_alpha() -> Any:
+    """Return the AEMS glyph as an L-mode Pillow image (alpha only).
+
+    Cached: every tray re-render at the same size pays one resize cost,
+    not a full PNG decode.
+    """
+    from PIL import Image
+
+    # importlib.resources works under both source installs and frozen
+    # PyInstaller bundles. The PyInstaller spec must include
+    # ``assets/aems-logo-mask.png`` via the ``datas=`` argument.
+    try:
+        ref = resources.files("aems_agent.assets").joinpath(_LOGO_MASK_FILENAME)
+        with resources.as_file(ref) as path:
+            img = Image.open(path).convert("RGBA")
+    except (FileNotFoundError, ModuleNotFoundError):
+        # Fallback for unusual layouts — look adjacent to this module.
+        here = Path(__file__).resolve().parent / "assets" / _LOGO_MASK_FILENAME
+        img = Image.open(here).convert("RGBA")
+
+    # We only need the alpha channel — colour will come from the badge.
+    return img.split()[-1]
+
 
 def render_status_icon(color: str = "green", size: int = RUNTIME_ICON_SIZE) -> Any:
-    """Render the tray/taskbar icon at the requested size."""
+    """Render the tray/taskbar icon at the requested size.
+
+    Args:
+        color: one of ``"green"``, ``"yellow"``, ``"red"`` (other values
+            fall back to green to match the legacy behaviour).
+        size: edge length in pixels.
+
+    Returns:
+        A Pillow :class:`Image.Image` in ``RGBA`` mode.
+    """
     from PIL import Image, ImageDraw
 
     bg = STATUS_COLORS.get(color, STATUS_COLORS["green"])
     inset = max(2, round(size * 0.08))
     radius = max(4, round(size * 0.18))
-    stroke_w = max(3, round(size * 0.14))
 
     img = Image.new("RGBA", (size, size), (0, 0, 0, 0))
     draw = ImageDraw.Draw(img)
@@ -33,23 +89,13 @@ def render_status_icon(color: str = "green", size: int = RUNTIME_ICON_SIZE) -> A
         fill=bg,
     )
 
-    pts = [
-        (size * 0.24, size * 0.54),
-        (size * 0.42, size * 0.71),
-        (size * 0.76, size * 0.34),
-    ]
-    mask = Image.new("L", (size, size), 0)
-    mask_draw = ImageDraw.Draw(mask)
-    mask_draw.line(pts, fill=255, width=stroke_w, joint="curve")
-    cap_radius = max(2, stroke_w // 2)
-    for x, y in pts:
-        mask_draw.ellipse(
-            [(x - cap_radius, y - cap_radius), (x + cap_radius, y + cap_radius)],
-            fill=255,
-        )
+    # Composite the AEMS glyph in white on top of the badge.
+    glyph_size = max(1, round(size * (1 - 2 * _GLYPH_INSET_RATIO)))
+    glyph_origin = (size - glyph_size) // 2
+    alpha = _load_logo_alpha().resize((glyph_size, glyph_size), Image.LANCZOS)
 
-    white = Image.new("RGBA", (size, size), (255, 255, 255, 255))
-    img.paste(white, (0, 0), mask)
+    white = Image.new("RGBA", (glyph_size, glyph_size), (255, 255, 255, 255))
+    img.paste(white, (glyph_origin, glyph_origin), alpha)
     return img
 
 
