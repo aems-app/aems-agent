@@ -29,6 +29,10 @@ def test_pick_folder_windows_reads_selected_path_from_powershell(
 
     assert result == selected
     assert "-STA" in captured["argv"]
+    # CREATE_NO_WINDOW (0x08000000) must be set so users don't see a flashing
+    # console window next to the folder dialog.
+    creationflags = captured["kwargs"].get("creationflags", 0)
+    assert creationflags & 0x08000000 == 0x08000000
 
 
 def test_open_folder_picker_persists_selected_windows_path(

@@ -2,6 +2,14 @@
 
 All notable changes to `aems-agent` are recorded here. Format follows [Keep a Changelog](https://keepachangelog.com/) and the project uses [SemVer](https://semver.org/).
 
+## 0.4.4 — 2026-05-25
+
+Cosmetic follow-up to 0.4.3. The tray "Set Storage Folder" command now runs its PowerShell helper hidden.
+
+### Fixed
+
+- **PowerShell console window no longer flashes next to the folder picker.** The 0.4.3 STA helper was launched without `CREATE_NO_WINDOW`, so every click on "Set Storage Folder" briefly displayed a black shell window beside the dialog. The helper now runs with the no-window creation flag and the folder picker appears alone.
+
 ## 0.4.3 — 2026-05-25
 
 Reliability hotfix for the desktop-agent path. A first-time tester (Zohar) hit a chain of issues during his prod run: the tray's "Set Storage Folder" dialog refused to close on Windows, in-place upgrades failed with `Error opening file for writing` because the running `aems-agent.exe` was locked, and once the agent shipped without a storage folder configured every PUT to `/files/*` returned an opaque `503` "Storage path not configured" that the web UI could not preempt.

@@ -47,6 +47,11 @@ if ($dialog.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) {
     Write-Output $dialog.SelectedPath
 }
 """
+    # CREATE_NO_WINDOW (0x08000000) keeps Windows from allocating a visible
+    # console window for the PowerShell helper. Without this, every "Set
+    # Storage Folder" click flashes a black shell window next to the folder
+    # dialog, which looks alarming to non-technical users.
+    creationflags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
     try:
         completed = subprocess.run(
             [
@@ -64,6 +69,7 @@ if ($dialog.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) {
             encoding="utf-8",
             timeout=120,
             check=False,
+            creationflags=creationflags,
         )
     except (OSError, subprocess.SubprocessError) as exc:
         logger.warning("Windows folder picker process failed: %s", exc)
