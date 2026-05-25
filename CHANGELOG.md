@@ -4,11 +4,16 @@ All notable changes to `aems-agent` are recorded here. Format follows [Keep a Ch
 
 ## 0.4.6 — 2026-05-25
 
-Tray + Windows icon now uses the AEMS brand glyph (the "A" mark from the aems.app website / aems-web favicon) tinted by status, instead of the generic green-checkmark badge it shipped with from 0.3.x onward.
+Tray + Windows icon now uses the AEMS brand glyph (the "A" mark from the aems.app website / aems-web favicon) tinted by status, instead of the generic green-checkmark badge the agent shipped with from 0.3.x onward.
 
 ### Changed
 
-- **Tray / taskbar icon shows the AEMS glyph in white on a status-coloured rounded-rectangle badge.** Green = running with storage configured, yellow = running but no storage path set, red = unreachable / error. The shape and status-colour mapping are preserved; only the foreground glyph changed from a generic checkmark to the brand glyph. Same renderer drives the multi-resolution Windows `.ico` (16/20/24/32/40/48/64/128/256), so Start menu / taskbar / Alt-Tab thumbnails all match.
+- **Live tray icon shows the AEMS glyph in white on a status-coloured rounded-rectangle badge.** At startup it picks green (running with a storage folder set) or yellow (running without). The shape mapping is preserved; only the foreground glyph changed from a generic checkmark to the brand glyph.
+- **Packaged Windows app icon** (the static `.ico` baked at build time, used by Start menu / taskbar / Alt-Tab thumbnails) now also uses the brand glyph at multiple resolutions (16/20/24/32/40/48/64/128/256). It is rendered once in green; it does NOT track live status — only the live tray icon does.
+
+### Known limitations
+
+- The red status colour exists in `icons.py` and is rendered for the multi-resolution `.ico` build path, but the live tray runtime does not currently repaint to red on failure: by the time `tray_status` would become "failed" or "unavailable", the tray thread is already dead and there is no live icon to recolour. The red variant is available for a future "storage folder disappeared" watcher.
 
 ### Internal
 

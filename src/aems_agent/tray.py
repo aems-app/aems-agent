@@ -4,7 +4,13 @@
 System tray integration for the AEMS Local Bridge Agent.
 
 Provides a tray icon with:
-- Status indicator (green = running, yellow = no storage path)
+- Status indicator at startup: green = running with storage path set,
+  yellow = running without a storage path. The icon does NOT currently
+  repaint red at runtime — failure paths (`tray_status = "failed" /
+  "unavailable"`) mean the tray thread is already dead, so there is no
+  live icon to recolour. The red variant exists in ``icons.py`` and is
+  available for a future "storage folder disappeared" watcher, but is
+  not wired up yet.
 - Menu: Open Settings, Set Storage Folder, Show Token, Quit
 
 Requires: pystray, pillow (PIL)
