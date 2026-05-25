@@ -2,6 +2,14 @@
 
 All notable changes to `aems-agent` are recorded here. Format follows [Keep a Changelog](https://keepachangelog.com/) and the project uses [SemVer](https://semver.org/).
 
+## 0.4.5 — 2026-05-25
+
+Follow-up to the 0.4.3/0.4.4 tray folder-picker chain.
+
+### Fixed
+
+- **Folder picker now stays in front of other windows.** The 0.4.3 STA PowerShell helper relied on default window activation, which can place the dialog behind whatever the user was focused on when they clicked "Set Storage Folder" — particularly easy to hit with a maximized browser. Now creates a transient invisible `Form` with `TopMost=$true` and passes it as the `ShowDialog` owner so the dialog inherits z-order and steals focus.
+
 ## 0.4.4 — 2026-05-25
 
 Cosmetic follow-up to 0.4.3. The tray "Set Storage Folder" command now runs its PowerShell helper hidden.

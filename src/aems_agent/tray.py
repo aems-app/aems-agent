@@ -37,14 +37,34 @@ def _pick_folder_windows() -> Optional[str]:
     thread-affinity problem and lets upgrades keep the agent itself
     windowless.
     """
+    # FolderBrowserDialog has no native TopMost / activate-on-show. Without an
+    # owner the dialog can appear behind the currently focused window (any
+    # full-screen app, or just whatever the user was looking at when they
+    # clicked the tray menu), and the click looks like a no-op. Create a
+    # transient invisible Form with TopMost=$true and pass it as the
+    # ShowDialog owner so the dialog inherits z-order and steals focus.
     script = r"""
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
 Add-Type -AssemblyName System.Windows.Forms
-$dialog = New-Object System.Windows.Forms.FolderBrowserDialog
-$dialog.Description = 'Select AEMS Exam Storage Folder'
-$dialog.ShowNewFolderButton = $true
-if ($dialog.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) {
-    Write-Output $dialog.SelectedPath
+$owner = New-Object System.Windows.Forms.Form
+$owner.TopMost = $true
+$owner.ShowInTaskbar = $false
+$owner.FormBorderStyle = [System.Windows.Forms.FormBorderStyle]::None
+$owner.StartPosition = [System.Windows.Forms.FormStartPosition]::Manual
+$owner.Location = New-Object System.Drawing.Point -10000,-10000
+$owner.Size = New-Object System.Drawing.Size 1,1
+$owner.Show()
+$owner.Activate()
+try {
+    $dialog = New-Object System.Windows.Forms.FolderBrowserDialog
+    $dialog.Description = 'Select AEMS Exam Storage Folder'
+    $dialog.ShowNewFolderButton = $true
+    if ($dialog.ShowDialog($owner) -eq [System.Windows.Forms.DialogResult]::OK) {
+        Write-Output $dialog.SelectedPath
+    }
+} finally {
+    $owner.Close()
+    $owner.Dispose()
 }
 """
     # CREATE_NO_WINDOW (0x08000000) keeps Windows from allocating a visible
