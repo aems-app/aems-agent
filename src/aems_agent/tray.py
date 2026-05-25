@@ -275,9 +275,7 @@ def start_tray_thread(config_dir: Path) -> threading.Thread:
     """
     icon = create_tray(config_dir)
 
-    thread = threading.Thread(
-        target=run_icon_safely, args=(icon,), daemon=True, name="aems-tray"
-    )
+    thread = threading.Thread(target=run_icon_safely, args=(icon,), daemon=True, name="aems-tray")
     thread.start()
 
     return thread
