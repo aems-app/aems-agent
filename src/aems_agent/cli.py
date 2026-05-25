@@ -162,6 +162,12 @@ def run(
     typer.echo(f"  Token file:   {config_dir / 'auth_token'}")
     typer.echo("")
 
+    # Pre-flight port check. uvicorn's bind failure on Windows in --noconsole
+    # PyInstaller builds produces no visible output — the user sees the .exe
+    # exit silently with no tray icon (Zohar 2026-05-25). Probe first so we
+    # can show a tk dialog explaining what's wrong.
+    _preflight_port_or_die(host, port)
+
     from .app import create_app
 
     agent_app = create_app(config_dir)
@@ -171,6 +177,70 @@ def run(
         _start_tray(config_dir, agent_app)
 
     uvicorn.run(agent_app, host=host, port=port, log_level="info")
+
+
+def _preflight_port_or_die(host: str, port: int) -> None:
+    """Verify the agent can bind ``port`` before uvicorn tries.
+
+    If the port is in use we attempt to identify whether the squatter is
+    another AEMS Agent (responds to ``GET /health``). If yes, we show a
+    "Agent already running" dialog and exit 0 — the user just launched it
+    twice, no error needed. If not, we show "Port 61234 is in use by
+    something else" and exit 1.
+    """
+    import socket
+
+    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    try:
+        sock.bind((host, port))
+    except OSError:
+        # Port is taken — is it another AEMS Agent?
+        already_aems = False
+        try:
+            import urllib.request
+
+            with urllib.request.urlopen(  # noqa: S310 - localhost only
+                f"http://{host}:{port}/health", timeout=1.0
+            ) as resp:
+                if resp.status == 200:
+                    body = resp.read(256).decode("utf-8", errors="ignore").lower()
+                    if "aems" in body or "ok" in body:
+                        already_aems = True
+        except Exception:
+            pass
+
+        msg = (
+            "Another AEMS Agent is already running on this computer.\n\n"
+            "Look for an existing tray icon, or stop the previous agent process\n"
+            "via Task Manager (search 'aems-agent') before launching again."
+            if already_aems
+            else (
+                f"AEMS Agent cannot start: port {port} is already in use by\n"
+                "another program on this computer.\n\n"
+                "Stop the process holding the port, or change the agent's port\n"
+                "via 'aems-agent run --port <other>'."
+            )
+        )
+        _show_startup_error_dialog(msg)
+        sys.exit(0 if already_aems else 1)
+    finally:
+        sock.close()
+
+
+def _show_startup_error_dialog(message: str) -> None:
+    """Pop a native tk message box. Best effort — falls back to stderr."""
+    try:
+        import tkinter as tk
+        from tkinter import messagebox
+
+        root = tk.Tk()
+        root.withdraw()
+        root.attributes("-topmost", True)
+        messagebox.showinfo("AEMS Agent", message)
+        root.destroy()
+    except Exception:
+        # tk not available (headless / no display) — log only.
+        typer.echo(message, err=True)
 
 
 def _start_tray(config_dir: Path, agent_app: Optional[FastAPI] = None) -> None:

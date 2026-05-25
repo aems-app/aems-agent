@@ -126,7 +126,19 @@ def create_tray(config_dir: Path) -> Any:
                 )
 
     def on_quit(icon: Any, item: Any) -> None:
-        icon.stop()
+        # Stop the tray loop first so the icon disappears immediately, then
+        # force-exit the whole process. Without the os._exit() the uvicorn
+        # main thread keeps running headlessly with no tray icon, the port
+        # stays bound, and the next launch of the .exe silently fails to
+        # bind 127.0.0.1:61234 (Zohar's "tray icon doesn't come back" bug
+        # — 2026-05-25). os._exit is intentionally hard-kill: the agent has
+        # no critical async state to flush, config writes are synchronous.
+        import os as _os
+
+        try:
+            icon.stop()
+        finally:
+            _os._exit(0)
 
     menu = pystray.Menu(
         pystray.MenuItem("Open Settings", on_open_settings, default=True),

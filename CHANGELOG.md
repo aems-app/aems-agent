@@ -2,6 +2,19 @@
 
 All notable changes to `aems-agent` are recorded here. Format follows [Keep a Changelog](https://keepachangelog.com/) and the project uses [SemVer](https://semver.org/).
 
+## 0.4.2 — 2026-05-25
+
+Reliability hotfix. A first-time Personal-plan tester (Zohar) hit two blocking issues during his prod run today; both are fixed here.
+
+### Fixed
+
+- **Quit-via-tray now terminates the whole agent process.** Previously the tray menu's "Quit" called `icon.stop()`, which only ended the daemon tray thread. The uvicorn HTTP server kept running headlessly on `127.0.0.1:61234` with no tray icon. The user thought the agent was off, tried to launch the .exe again, and the second instance silently failed to bind the port in `--noconsole` PyInstaller mode — no error message, no tray icon, no recourse short of Task Manager. `on_quit` now follows up `icon.stop()` with `os._exit(0)` so the process exits cleanly.
+- **Startup port-conflict is now visible.** Before launching uvicorn the agent probes `127.0.0.1:<port>` and, if the bind would fail, surfaces a tk message-box explaining what's wrong. If the squatter responds to `/health` like an AEMS Agent we treat it as "already running" and exit 0; otherwise we report "port in use by something else" and exit 1. This replaces the previous silent failure of windowed builds.
+
+### Operational note
+
+If you are upgrading from `0.4.1` and the previous agent's tray icon disappeared but the process is still listening (which is the bug this release fixes), open Task Manager, end `aems-agent.exe`, then run the new installer.
+
 ## 0.3.7 — 2026-05-21
 
 Security hardening of the local-bridge surface, plus reliability fixes on the file-IO and CRUD paths. All changes are local to the agent and require no AEMS server-side update.
