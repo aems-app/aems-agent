@@ -98,14 +98,6 @@ def _pdf_rect_to_pymupdf(rect: List[float], page_height: float) -> List[float]:
     return [x0, y0_mu, x1, y1_mu]
 
 
-def _pymupdf_rect_to_pdf(rect: List[float], page_height: float) -> List[float]:
-    """Convert a PyMuPDF rect (top-left origin) back to PDF coordinates."""
-    x0, y0_mu, x1, y1_mu = rect
-    y0_pdf = page_height - y1_mu
-    y1_pdf = page_height - y0_mu
-    return [x0, y0_pdf, x1, y1_pdf]
-
-
 # ---------------------------------------------------------------------------
 # File-level lock manager
 # ---------------------------------------------------------------------------
@@ -222,7 +214,6 @@ def resolve_annotation_identifier(identifier: str) -> Tuple[Optional[int], Optio
 
 def serialize_annotation_entry(
     annotation: Optional[Dict[str, Any]],
-    page_height: Optional[float] = None,
 ) -> Optional[Dict[str, Any]]:
     """Convert an annotation dict (from ``get_annotations_on_page``) to the
     JSON shape expected by the browser.
@@ -230,6 +221,11 @@ def serialize_annotation_entry(
     The shared package already returns dicts with ``stable_id``, ``xref``,
     ``source``, etc.  This function normalises a few fields and adds derived
     ones (``can_revert_to_ai``, ``id``).
+
+    Important: ``get_annotations_on_page`` already exposes ``rect`` in the
+    same PyMuPDF top-left coordinate space used by the browser annotator's
+    overlay/rendering code. Preserve that contract here so local-agent review
+    matches server/offline review behaviour.
     """
     if not annotation:
         return None
@@ -240,9 +236,6 @@ def serialize_annotation_entry(
     rect = serialized.get("rect")
     if rect and isinstance(rect, tuple):
         serialized["rect"] = list(rect)
-        rect = serialized["rect"]
-    if rect and page_height is not None:
-        serialized["rect"] = _pymupdf_rect_to_pdf(list(rect), page_height)
 
     # Resolve stable_id / id
     stable_id = serialized.get("stable_id")
@@ -411,11 +404,7 @@ def list_annotations(pdf_path: Path) -> Dict[str, Any]:
             for page_idx in range(annotator.doc.page_count):
                 page_annotations = annotator.get_annotations_on_page(page_idx)
                 if page_annotations:
-                    page_height = annotator.doc[page_idx].rect.height or 792.0
-                    raw = [
-                        serialize_annotation_entry(ann, page_height=page_height)
-                        for ann in page_annotations
-                    ]
+                    raw = [serialize_annotation_entry(ann) for ann in page_annotations]
                     # Filter out None entries
                     serialized: list[Dict[str, Any]] = [s for s in raw if s is not None]
                     if serialized:
@@ -562,7 +551,7 @@ def add_annotation(pdf_path: Path, payload: Dict[str, Any]) -> Dict[str, Any]:
             # Find the newly created annotation
             page_annotations = annotator.get_annotations_on_page(page_index)
             created = select_annotation_entry(page_annotations, stable_id=annotation.id, xref=None)
-            created_serialized = serialize_annotation_entry(created, page_height=page_height)
+            created_serialized = serialize_annotation_entry(created)
 
             if not created_serialized:
                 # Fallback: build a minimal response
@@ -729,11 +718,7 @@ def update_annotation(
                         page_annotations, stable_id=stable_id, xref=xref_value
                     )
 
-            target_page_height = None
-            if updated_ann is not None:
-                target_page_index = int(updated_ann.get("page_index", 0))
-                target_page_height = annotator.doc[target_page_index].rect.height or 792.0
-            serialized = serialize_annotation_entry(updated_ann, page_height=target_page_height)
+            serialized = serialize_annotation_entry(updated_ann)
 
     return {"success": True, "annotation": serialized}
 

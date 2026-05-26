@@ -219,7 +219,14 @@ def generate_bundle(
                 pixmap = page.get_pixmap(dpi=dpi, alpha=False)
                 image = Image.frombytes("RGB", (pixmap.width, pixmap.height), pixmap.samples)
                 webp_buffer = BytesIO()
-                image.save(webp_buffer, format="WEBP", quality=95, lossless=True, method=6)
+                # Lossy WebP at quality=85 — matches the server-side encoder
+                # in providers/ollama/provider.py and the rest of the AEMS
+                # image pipeline. Lossless WebP at quality=95 was producing
+                # 50-150 MB JSON bundles for multi-page handwritten exams,
+                # which exceeded the AEMS server's request-body cap and broke
+                # offline-local grading (Zohar's 413 at 39%, 2026-05-26).
+                # Vision LLMs do not benefit from lossless input.
+                image.save(webp_buffer, format="WEBP", quality=85, method=6)
                 img_bytes = webp_buffer.getvalue()
                 encoded_image = base64.b64encode(img_bytes).decode("ascii")
                 page_data["image_base64"] = encoded_image

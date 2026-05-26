@@ -2,6 +2,19 @@
 
 All notable changes to `aems-agent` are recorded here. Format follows [Keep a Changelog](https://keepachangelog.com/) and the project uses [SemVer](https://semver.org/).
 
+## 0.4.7 — 2026-05-27
+
+Bundle size + annotation-coordinate fixes driven by Zohar's Day-2 retest report (2026-05-26).
+
+### Fixed
+
+- **Grading bundle is now lossy WebP at quality=85 (was lossless q=95).** Multi-page handwritten exams were producing 50-150 MB JSON bundles, which exceeded the AEMS server's `MAX_CONTENT_LENGTH` and surfaced as `413 Payload Too Large` mid-grading. Vision LLMs do not benefit from lossless input; lossy q=85 matches the rest of the AEMS image pipeline. After this change, 8-student SE1020-style bundles are typically 1-4 MB per submission.
+- **`serialize_annotation_entry` no longer flips PyMuPDF → PDF on read.** The browser annotator's overlay/rendering code consumes rects in PyMuPDF top-left space; the read-path flip in v0.4.6 forced the UI to compensate, and the undo path's compensating flip then double-flipped under some PDF.js viewport conventions, producing the "Ctrl-Z restores annotation at wrong position" symptom. Both read and write paths now use the PyMuPDF top-left contract end-to-end; the API helper `_pdf_rect_to_pymupdf` continues to convert incoming browser-supplied PDF bottom-left rects on the add path.
+
+### Internal
+
+- `_pymupdf_rect_to_pdf` helper removed (no remaining callers).
+
 ## 0.4.6 — 2026-05-25
 
 Tray + Windows icon now uses the AEMS brand glyph (the "A" mark from the aems.app website / aems-web favicon) tinted by status, instead of the generic green-checkmark badge the agent shipped with from 0.3.x onward.

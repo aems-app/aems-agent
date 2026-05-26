@@ -17,6 +17,11 @@ from aems_pdf_annotator import (
 )
 
 
+def _pdf_rect_to_top_left(rect: List[float], page_height: float = 792.0) -> List[float]:
+    """Convert browser request rects to the UI response coordinate space."""
+    return [rect[0], page_height - rect[3], rect[2], page_height - rect[1]]
+
+
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------
@@ -91,6 +96,17 @@ def annotated_pdf(tmp_path: Path) -> Path:
 
 
 class TestListAnnotations:
+    def test_list_preserves_top_left_rect_contract(self, annotated_pdf: Path) -> None:
+        from aems_agent.annotation_crud import list_annotations
+
+        result = list_annotations(annotated_pdf)
+        first_ann = result["annotations"]["0"][0]
+        returned_rect = first_ann["rect"]
+        assert returned_rect is not None
+        # Fixture annotations were created in PyMuPDF top-left space near the
+        # lower half of the page. Returning PDF-space would flip them upward.
+        assert returned_rect[1] > 400
+
     def test_list_returns_all_annotations_grouped_by_page(
         self, annotated_pdf: Path
     ) -> None:
@@ -270,14 +286,13 @@ class TestAddAnnotation:
         assert ann["stable_id"] is not None
         assert len(ann["stable_id"]) > 0
 
-    def test_add_round_trips_pdf_rect_without_double_conversion(
+    def test_add_returns_top_left_rect_after_pdf_request_conversion(
         self, empty_pdf: Path
     ) -> None:
-        """Verify that the rect sent in PDF coordinates comes back in PDF coordinates.
+        """Browser requests use PDF coordinates; responses must use UI top-left coordinates.
 
-        Use a highlight annotation because text (sticky note) annotations are
-        stored at a point, not a rect, so the exact rect round-trip does not
-        apply to them.
+        The shared browser annotator keeps local ``annotationsData[*].rect`` in
+        PyMuPDF top-left space, matching server/offline responses.
         """
         from aems_agent.annotation_crud import add_annotation
 
@@ -295,11 +310,9 @@ class TestAddAnnotation:
         ann = result["annotation"]
         returned_rect = ann["rect"]
         assert returned_rect is not None
-        # Highlight rect should round-trip in PDF coordinates.
-        # y values should stay in the 700+ range (near top in PDF space).
-        assert returned_rect[1] > 600  # y0 should be near top in PDF coords
-        # x0 should be approximately the same
+        expected_rect = _pdf_rect_to_top_left(input_rect)
         assert abs(returned_rect[0] - 50.0) < 5.0
+        assert returned_rect[1] == pytest.approx(expected_rect[1], abs=5.0)
 
     def test_add_missing_page_index_raises(self, empty_pdf: Path) -> None:
         from aems_agent.annotation_crud import add_annotation
@@ -483,23 +496,28 @@ class TestUpdateAnnotation:
         returned_rect = result["annotation"]["rect"]
         assert returned_rect is not None
 
-    def test_update_round_trips_pdf_rect_without_double_conversion(
-        self, annotated_pdf: Path
+    def test_update_returns_top_left_rect_after_pdf_request_conversion(
+        self, empty_pdf: Path
     ) -> None:
-        """Rect sent in PDF coords should come back in PDF coords."""
-        from aems_agent.annotation_crud import update_annotation
+        """Update responses should match the browser's top-left rect contract."""
+        from aems_agent.annotation_crud import add_annotation, update_annotation
 
-        ann_id = self._get_first_annotation_id(annotated_pdf)
-        new_rect = [100.0, 600.0, 250.0, 650.0]
-        result = update_annotation(
-            annotated_pdf,
-            ann_id,
-            {"rect": new_rect},
+        created = add_annotation(
+            empty_pdf,
+            {
+                "page_index": 0,
+                "content": "Movable note",
+                "type": "highlight",
+                "rect": [80.0, 620.0, 220.0, 660.0],
+            },
         )
+        ann_id = created["annotation"]["id"]
+        new_rect = [100.0, 600.0, 250.0, 650.0]
+        result = update_annotation(empty_pdf, ann_id, {"rect": new_rect})
         assert result["success"] is True
         returned_rect = result["annotation"]["rect"]
-        # The y-values should still be in the 600-650 range (PDF space, near top)
-        assert returned_rect[1] > 500
+        expected_rect = _pdf_rect_to_top_left(new_rect)
+        assert returned_rect[1] == pytest.approx(expected_rect[1], abs=5.0)
 
     def test_update_cross_page_move(self, annotated_pdf: Path) -> None:
         from aems_agent.annotation_crud import update_annotation, list_annotations
