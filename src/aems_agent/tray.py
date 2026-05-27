@@ -77,7 +77,7 @@ try {
     # console window for the PowerShell helper. Without this, every "Set
     # Storage Folder" click flashes a black shell window next to the folder
     # dialog, which looks alarming to non-technical users.
-    creationflags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+    creationflags = getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000)
     try:
         completed = subprocess.run(
             [

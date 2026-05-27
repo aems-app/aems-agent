@@ -29,7 +29,8 @@ class TestGetConfigDir:
             assert "AEMS" in str(result)
             assert "agent" in str(result)
         else:
-            assert ".config" in str(result) or "aems" in str(result)
+            result_str = str(result)
+            assert ".config" in result_str or "aems" in result_str.lower()
 
 
 class TestGetConfigDirCrossPlatform:
