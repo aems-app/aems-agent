@@ -438,7 +438,11 @@ class TestDownloadJob:
 
     @pytest.mark.asyncio
     async def test_run_download_job_updates_progress_incrementally(self, tmp_path: Path) -> None:
-        from aems_agent.canvas_download import create_download_job, get_download_job, run_download_job
+        from aems_agent.canvas_download import (
+            create_download_job,
+            get_download_job,
+            run_download_job,
+        )
 
         pdf_content = b"%PDF-1.4 progress"
         mock_response = AsyncMock()

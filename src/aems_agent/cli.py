@@ -77,6 +77,7 @@ from .config import (
     save_config,
 )
 
+
 def _version_callback(value: bool) -> None:
     """Print the agent version and exit 0 when --version is passed."""
     if value:

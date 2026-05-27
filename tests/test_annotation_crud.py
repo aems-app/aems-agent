@@ -107,9 +107,7 @@ class TestListAnnotations:
         # lower half of the page. Returning PDF-space would flip them upward.
         assert returned_rect[1] > 400
 
-    def test_list_returns_all_annotations_grouped_by_page(
-        self, annotated_pdf: Path
-    ) -> None:
+    def test_list_returns_all_annotations_grouped_by_page(self, annotated_pdf: Path) -> None:
         from aems_agent.annotation_crud import list_annotations
 
         result = list_annotations(annotated_pdf)
@@ -127,9 +125,7 @@ class TestListAnnotations:
         # Empty PDF should have no annotations at all
         assert result["annotations"] == {}
 
-    def test_list_serialization_includes_required_fields(
-        self, annotated_pdf: Path
-    ) -> None:
+    def test_list_serialization_includes_required_fields(self, annotated_pdf: Path) -> None:
         from aems_agent.annotation_crud import list_annotations
 
         result = list_annotations(annotated_pdf)
@@ -286,9 +282,7 @@ class TestAddAnnotation:
         assert ann["stable_id"] is not None
         assert len(ann["stable_id"]) > 0
 
-    def test_add_returns_top_left_rect_after_pdf_request_conversion(
-        self, empty_pdf: Path
-    ) -> None:
+    def test_add_returns_top_left_rect_after_pdf_request_conversion(self, empty_pdf: Path) -> None:
         """Browser requests use PDF coordinates; responses must use UI top-left coordinates.
 
         The shared browser annotator keeps local ``annotationsData[*].rect`` in
@@ -351,9 +345,7 @@ class TestAddAnnotation:
                 },
             )
 
-    def test_add_generates_default_rect_when_not_provided(
-        self, empty_pdf: Path
-    ) -> None:
+    def test_add_generates_default_rect_when_not_provided(self, empty_pdf: Path) -> None:
         from aems_agent.annotation_crud import add_annotation
 
         result = add_annotation(
@@ -379,9 +371,7 @@ class TestResolveAnnotationIdentifier:
     def test_uuid_string(self) -> None:
         from aems_agent.annotation_crud import resolve_annotation_identifier
 
-        xref, stable_id = resolve_annotation_identifier(
-            "a1b2c3d4-e5f6-7890-abcd-ef1234567890"
-        )
+        xref, stable_id = resolve_annotation_identifier("a1b2c3d4-e5f6-7890-abcd-ef1234567890")
         assert xref is None
         assert stable_id == "a1b2c3d4-e5f6-7890-abcd-ef1234567890"
 
@@ -548,9 +538,7 @@ class TestUpdateAnnotation:
         assert result["success"] is True
         assert result["annotation"]["source"] == "HUMAN"
 
-    def test_update_nonexistent_annotation_raises(
-        self, annotated_pdf: Path
-    ) -> None:
+    def test_update_nonexistent_annotation_raises(self, annotated_pdf: Path) -> None:
         from aems_agent.annotation_crud import update_annotation
 
         with pytest.raises(FileNotFoundError, match="not found"):
@@ -567,9 +555,7 @@ class TestUpdateAnnotation:
         with pytest.raises(ValueError, match="at least one"):
             update_annotation(annotated_pdf, ann_id, {})
 
-    def test_update_supports_uuid_xref_and_composite_identifiers(
-        self, annotated_pdf: Path
-    ) -> None:
+    def test_update_supports_uuid_xref_and_composite_identifiers(self, annotated_pdf: Path) -> None:
         from aems_agent.annotation_crud import update_annotation, list_annotations
 
         result = list_annotations(annotated_pdf)
@@ -625,9 +611,7 @@ class TestDeleteAnnotation:
         assert delete_result["success"] is True
         assert "deleted" in delete_result["message"].lower()
 
-    def test_delete_nonexistent_annotation_raises(
-        self, annotated_pdf: Path
-    ) -> None:
+    def test_delete_nonexistent_annotation_raises(self, annotated_pdf: Path) -> None:
         from aems_agent.annotation_crud import delete_annotation
 
         with pytest.raises(FileNotFoundError, match="not found"):
@@ -637,16 +621,12 @@ class TestDeleteAnnotation:
         from aems_agent.annotation_crud import delete_annotation, list_annotations
 
         result_before = list_annotations(annotated_pdf)
-        total_before = sum(
-            len(anns) for anns in result_before["annotations"].values()
-        )
+        total_before = sum(len(anns) for anns in result_before["annotations"].values())
         assert total_before == 3
 
         ann_id = result_before["annotations"]["0"][0]["id"]
         delete_annotation(annotated_pdf, ann_id)
 
         result_after = list_annotations(annotated_pdf)
-        total_after = sum(
-            len(anns) for anns in result_after["annotations"].values()
-        )
+        total_after = sum(len(anns) for anns in result_after["annotations"].values())
         assert total_after == 2

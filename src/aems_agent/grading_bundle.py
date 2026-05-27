@@ -29,10 +29,35 @@ _LOW_TEXT_DENSITY_THRESHOLD = 0.0001
 
 # Tokens that indicate mathematical/formula content on a page.
 _MATH_TOKENS = [
-    "\\frac", "\\sum", "\\int", "\\sqrt", "\\partial", "\\infty",
-    "\\alpha", "\\beta", "\\gamma", "\\delta", "\\epsilon", "\\sigma",
-    "\\theta", "\\lambda", "\\mu", "\\phi", "\\omega", "\\pi",
-    "≥", "≤", "≠", "≈", "∑", "∫", "√", "∂", "∞", "→", "⇒",
+    "\\frac",
+    "\\sum",
+    "\\int",
+    "\\sqrt",
+    "\\partial",
+    "\\infty",
+    "\\alpha",
+    "\\beta",
+    "\\gamma",
+    "\\delta",
+    "\\epsilon",
+    "\\sigma",
+    "\\theta",
+    "\\lambda",
+    "\\mu",
+    "\\phi",
+    "\\omega",
+    "\\pi",
+    "≥",
+    "≤",
+    "≠",
+    "≈",
+    "∑",
+    "∫",
+    "√",
+    "∂",
+    "∞",
+    "→",
+    "⇒",
 ]
 _MATH_OPERATORS = set("=+-/^×·∙")
 
@@ -136,7 +161,10 @@ def generate_bundle(
         if strategy == "smart":
             for j in range(pages_to_process):
                 pg = doc[j]
-                if len(pg.get_text("text").strip()) < _MIN_TEXT_LENGTH and pg.rect.width * pg.rect.height > 0:
+                if (
+                    len(pg.get_text("text").strip()) < _MIN_TEXT_LENGTH
+                    and pg.rect.width * pg.rect.height > 0
+                ):
                     doc_has_handwriting = True
                     break
 
@@ -163,11 +191,10 @@ def generate_bundle(
             # decide whether pre_rendered_images apply to this page, so these
             # flags must be True whenever we render an image.
             page_needs_vision = (
-                is_low_text
-                or doc_has_handwriting
-                or has_figures
-                or has_formulas
-            ) if strategy == "smart" else (strategy == "multimodal")
+                (is_low_text or doc_has_handwriting or has_figures or has_formulas)
+                if strategy == "smart"
+                else (strategy == "multimodal")
+            )
 
             # For handwritten pages, PyMuPDF's get_text() produces garbled
             # characters that confuse the LLM (it tries to interpret garbage
@@ -208,10 +235,10 @@ def generate_bundle(
                 needs_image = True
             elif strategy == "smart":
                 needs_image = (
-                    is_low_text              # very little extractable text
-                    or doc_has_handwriting    # any page is handwritten → all need images
-                    or has_figures            # page has embedded images / diagrams
-                    or has_formulas           # page has math notation
+                    is_low_text  # very little extractable text
+                    or doc_has_handwriting  # any page is handwritten → all need images
+                    or has_figures  # page has embedded images / diagrams
+                    or has_formulas  # page has math notation
                 )
             # text_only: never render images
 

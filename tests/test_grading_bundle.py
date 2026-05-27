@@ -76,9 +76,7 @@ class TestGenerateBundle:
         bundle = generate_bundle(sample_pdf, strategy="smart", dpi=72)
         assert bundle["metadata"]["page_count"] == 2
 
-    def test_smart_strategy_preserves_typed_text_across_short_cover(
-        self, tmp_path: Path
-    ) -> None:
+    def test_smart_strategy_preserves_typed_text_across_short_cover(self, tmp_path: Path) -> None:
         """Regression: a typed multi-page report with a short cover page must
         retain native text on the long answer pages.
 
@@ -115,9 +113,9 @@ class TestGenerateBundle:
         # Long typed answer page must keep its native text so the server's
         # native-text router can anchor it to a task.
         answer_text = bundle["pages"][1]["text"]
-        assert "effective spring constant" in answer_text, (
-            f"Expected typed answer text on page 2; got {answer_text!r}"
-        )
+        assert (
+            "effective spring constant" in answer_text
+        ), f"Expected typed answer text on page 2; got {answer_text!r}"
         assert "3.1.2" in answer_text
 
     def test_max_pages_limit(self, sample_pdf: Path) -> None:
@@ -152,19 +150,18 @@ class TestBundleCaching:
 
     def test_cached_bundle_returned_on_second_call(self, sample_pdf: Path, tmp_path: Path) -> None:
         cache_dir = tmp_path / "_cache"
-        bundle1 = generate_bundle(
-            sample_pdf, strategy="text_only", dpi=150, cache_dir=cache_dir
-        )
-        bundle2 = generate_bundle(
-            sample_pdf, strategy="text_only", dpi=150, cache_dir=cache_dir
-        )
+        bundle1 = generate_bundle(sample_pdf, strategy="text_only", dpi=150, cache_dir=cache_dir)
+        bundle2 = generate_bundle(sample_pdf, strategy="text_only", dpi=150, cache_dir=cache_dir)
         assert bundle1 == bundle2
 
     def test_force_refresh_bypasses_cache(self, sample_pdf: Path, tmp_path: Path) -> None:
         cache_dir = tmp_path / "_cache"
         generate_bundle(sample_pdf, strategy="text_only", dpi=150, cache_dir=cache_dir)
         bundle = generate_bundle(
-            sample_pdf, strategy="text_only", dpi=150,
-            cache_dir=cache_dir, force_refresh=True,
+            sample_pdf,
+            strategy="text_only",
+            dpi=150,
+            cache_dir=cache_dir,
+            force_refresh=True,
         )
         assert bundle["bundle_version"] == 1

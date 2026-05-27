@@ -52,8 +52,6 @@ def test_config_dir_command(
     assert str(tmp_path) in result.output
 
 
-
-
 def test_ensure_stdio_streams_substitutes_none(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

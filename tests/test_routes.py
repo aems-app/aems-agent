@@ -223,6 +223,7 @@ class TestConfigPathEndpoints:
         )
         assert resp.status_code == 422  # Pydantic validation error
 
+
 class TestFileOperations:
     """Tests for file store/retrieve/delete endpoints."""
 
@@ -723,9 +724,7 @@ class TestPathValidation:
         )
         assert resp.status_code in (400, 404, 422)
 
-    def test_space_in_assignment_id_rejected(
-        self, agent_client: Any, auth_headers: dict
-    ) -> None:
+    def test_space_in_assignment_id_rejected(self, agent_client: Any, auth_headers: dict) -> None:
         _skip_if_no_fastapi()
         resp = agent_client.get("/files/assign%20ment", headers=auth_headers)
         assert resp.status_code in (400, 404, 422)
@@ -787,7 +786,6 @@ class TestSha256Validation:
             headers={**auth_headers, "Content-Type": "application/pdf"},
         )
         assert resp.status_code == 400
-
 
 
 # ---------------------------------------------------------------------------
@@ -992,7 +990,9 @@ class TestCORSDynamicOrigins:
         # CORSMiddleware should match via allow_origin_regex
         assert resp.headers.get("access-control-allow-origin") == origin
 
-    def test_private_network_preflight_is_allowed_for_localhost_origin(self, agent_client: Any) -> None:
+    def test_private_network_preflight_is_allowed_for_localhost_origin(
+        self, agent_client: Any
+    ) -> None:
         """Loopback origins must pass Private Network Access preflights."""
         _skip_if_no_fastapi()
         if not _supports_private_network_cors():
@@ -1023,6 +1023,7 @@ class TestCORSDynamicOrigins:
         assert init_resp.status_code == 200
         challenge_id = init_resp.json()["challenge_id"]
         from aems_agent import routes
+
         pin = routes._pairing_challenge["pin"]
         complete_resp = agent_client.post(
             "/pair/complete",
@@ -1096,9 +1097,7 @@ class TestCORSDynamicOrigins:
         assert "access-control-allow-private-network" not in {
             k.lower() for k in resp.headers.keys()
         }
-        assert "access-control-allow-local-network" not in {
-            k.lower() for k in resp.headers.keys()
-        }
+        assert "access-control-allow-local-network" not in {k.lower() for k in resp.headers.keys()}
 
 
 # ---------------------------------------------------------------------------
@@ -1358,9 +1357,7 @@ class TestDataJsonEndpoints:
         resp = agent_client.get("/data/100/results/200.json")
         assert resp.status_code == 401
 
-    def test_data_path_traversal_blocked(
-        self, agent_client: Any, auth_headers: dict
-    ) -> None:
+    def test_data_path_traversal_blocked(self, agent_client: Any, auth_headers: dict) -> None:
         """Path traversal attempts are rejected."""
         _skip_if_no_fastapi()
         resp = agent_client.get("/data/../secrets/200.json", headers=auth_headers)
@@ -1580,18 +1577,24 @@ class TestCreateAppLogHandlers:
         save_config(AgentConfig(), config_dir)
 
         agent_logger = logging.getLogger("aems_agent")
-        initial_count = len([
-            h for h in agent_logger.handlers
-            if isinstance(h, logging.handlers.RotatingFileHandler)
-        ])
+        initial_count = len(
+            [
+                h
+                for h in agent_logger.handlers
+                if isinstance(h, logging.handlers.RotatingFileHandler)
+            ]
+        )
 
         create_app(config_dir)
         create_app(config_dir)
 
-        rotating_count = len([
-            h for h in agent_logger.handlers
-            if isinstance(h, logging.handlers.RotatingFileHandler)
-        ])
+        rotating_count = len(
+            [
+                h
+                for h in agent_logger.handlers
+                if isinstance(h, logging.handlers.RotatingFileHandler)
+            ]
+        )
         # At most one new RotatingFileHandler should exist
         assert rotating_count <= initial_count + 1
 
@@ -1616,9 +1619,7 @@ class TestCanvasDownloadRoutes:
         assert resp.status_code == 400
         assert "decrypt" in resp.json()["detail"].lower()
 
-    def test_canvas_download_job_not_found(
-        self, agent_client: Any, auth_headers: dict
-    ) -> None:
+    def test_canvas_download_job_not_found(self, agent_client: Any, auth_headers: dict) -> None:
         _skip_if_no_fastapi()
         resp = agent_client.get("/canvas/download-jobs/missing-job", headers=auth_headers)
         assert resp.status_code == 404
@@ -2128,6 +2129,7 @@ class TestGradingBundleEndpoint:
     def _create_submission_pdf(self, storage_path: Path, aid: str, sid: str) -> None:
         """Helper to create a test submission PDF."""
         import fitz
+
         pdf_dir = storage_path / aid / sid
         pdf_dir.mkdir(parents=True, exist_ok=True)
         doc = fitz.open()
@@ -2208,13 +2210,16 @@ class TestPairingClipboard:
             captured["argv"] = argv
             captured["input"] = kwargs.get("input")
             captured["encoding"] = kwargs.get("encoding")
+
             class _R:
                 returncode = 0
+
             return _R()
 
         # _copy_pin_to_clipboard imports platform + subprocess lazily.
         import platform as _p
         import subprocess as _sp
+
         monkeypatch.setattr(_p, "system", lambda: "Windows")
         monkeypatch.setattr(_sp, "run", fake_run)
 
@@ -2224,12 +2229,11 @@ class TestPairingClipboard:
         assert captured["input"] == "123456"
         assert captured["encoding"] == "utf-16-le"
 
-    def test_copy_pin_to_clipboard_returns_false_on_unsupported_platform(
-        self, monkeypatch
-    ) -> None:
+    def test_copy_pin_to_clipboard_returns_false_on_unsupported_platform(self, monkeypatch) -> None:
         from aems_agent import routes
 
         import platform as _p
+
         monkeypatch.setattr(_p, "system", lambda: "Plan9")
         assert routes._copy_pin_to_clipboard("123456") is False
 
@@ -2243,7 +2247,9 @@ class TestPairingClipboard:
             captured["pin"] = pin
             captured["clipboard_ok"] = clipboard_ok
 
-        request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(tray_notifier=notifier)))
+        request = SimpleNamespace(
+            app=SimpleNamespace(state=SimpleNamespace(tray_notifier=notifier))
+        )
         routes._notify_pairing_pin(request, "654321", clipboard_ok=True)
 
         assert captured == {"pin": "654321", "clipboard_ok": True}
@@ -2257,7 +2263,9 @@ class TestPairingClipboard:
         def legacy_notifier(pin: str) -> None:
             captured["pin"] = pin
 
-        request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(tray_notifier=legacy_notifier)))
+        request = SimpleNamespace(
+            app=SimpleNamespace(state=SimpleNamespace(tray_notifier=legacy_notifier))
+        )
         routes._notify_pairing_pin(request, "111222", clipboard_ok=True)
 
         assert captured == {"pin": "111222"}

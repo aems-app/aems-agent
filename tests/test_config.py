@@ -110,6 +110,7 @@ class TestAgentConfig:
         with pytest.raises(ValueError):
             AgentConfig(port=99999)
 
+
 class TestLoadSaveConfig:
     """Tests for load_config/save_config."""
 
@@ -176,4 +177,3 @@ class TestAuthToken:
 
         token = ensure_auth_token(config_dir)
         assert get_auth_token(config_dir) == token
-

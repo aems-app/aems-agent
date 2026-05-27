@@ -657,18 +657,14 @@ def update_annotation(
                 target_pg = new_page_index
                 if target_pg is None:
                     found = (
-                        annotator.find_annotation_by_id(canonical_identifier)
-                        if stable_id
-                        else None
+                        annotator.find_annotation_by_id(canonical_identifier) if stable_id else None
                     )
                     if not found and xref_value is not None:
                         found = annotator.find_annotation_by_xref(xref_value)
                     target_pg = found[0] if found else 0
                 page_obj = annotator.doc[target_pg]
                 page_height = page_obj.rect.height or 792.0
-                rect_tuple = tuple(
-                    _pdf_rect_to_pymupdf(list(new_rect), page_height)
-                )
+                rect_tuple = tuple(_pdf_rect_to_pymupdf(list(new_rect), page_height))
 
             update_result = annotator.update_annotation(
                 annotation_identifier=canonical_identifier,

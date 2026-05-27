@@ -80,9 +80,7 @@ class TestAnnotateEndpoint:
     ) -> None:
         _skip_if_no_fastapi()
         _create_submission_and_results(tmp_storage_path, "assign-1", "sub-1")
-        resp = agent_client.post(
-            "/annotate/assign-1/sub-1", headers=auth_headers
-        )
+        resp = agent_client.post("/annotate/assign-1/sub-1", headers=auth_headers)
         assert resp.status_code == 200
         data = resp.json()
         assert data["status"] == "ok"
@@ -113,9 +111,7 @@ class TestAnnotateEndpoint:
         resp1 = agent_client.post("/annotate/assign-1/sub-1", headers=auth_headers)
         assert resp1.status_code == 200
 
-        resp2 = agent_client.post(
-            "/annotate/assign-1/sub-1?force=true", headers=auth_headers
-        )
+        resp2 = agent_client.post("/annotate/assign-1/sub-1?force=true", headers=auth_headers)
         assert resp2.status_code == 200
         assert resp2.json()["existing"] is False
 
@@ -123,9 +119,7 @@ class TestAnnotateEndpoint:
         self, agent_client: Any, auth_headers: dict, tmp_storage_path: Path
     ) -> None:
         _skip_if_no_fastapi()
-        resp = agent_client.post(
-            "/annotate/assign-1/nonexistent", headers=auth_headers
-        )
+        resp = agent_client.post("/annotate/assign-1/nonexistent", headers=auth_headers)
         assert resp.status_code == 404
 
     def test_annotate_missing_pdf(
@@ -139,8 +133,13 @@ class TestAnnotateEndpoint:
             "annotation_contract_version": 1,
             "coordinate_space": "visual_top_left_normalized_v1",
             "feedback_items": [
-                {"page": 1, "x_normalized": 0.1, "y_normalized": 0.2,
-                 "comment": "test", "priority": "low"},
+                {
+                    "page": 1,
+                    "x_normalized": 0.1,
+                    "y_normalized": 0.2,
+                    "comment": "test",
+                    "priority": "low",
+                },
             ],
         }
         (data_dir / "s1.json").write_text(json.dumps(results))
@@ -152,9 +151,7 @@ class TestAnnotateEndpoint:
         self, agent_client: Any, auth_headers: dict, tmp_storage_path: Path
     ) -> None:
         _skip_if_no_fastapi()
-        _create_submission_and_results(
-            tmp_storage_path, "assign-1", "sub-1", contract_version=99
-        )
+        _create_submission_and_results(tmp_storage_path, "assign-1", "sub-1", contract_version=99)
         resp = agent_client.post("/annotate/assign-1/sub-1", headers=auth_headers)
         assert resp.status_code == 422
 
@@ -265,19 +262,13 @@ class TestAnnotateEndpoint:
         assert annots[0].rect.y0 < 120
         doc.close()
 
-    def test_annotate_requires_auth(
-        self, agent_client: Any, tmp_storage_path: Path
-    ) -> None:
+    def test_annotate_requires_auth(self, agent_client: Any, tmp_storage_path: Path) -> None:
         _skip_if_no_fastapi()
         resp = agent_client.post("/annotate/assign-1/sub-1")
         assert resp.status_code in (401, 403)
 
-    def test_annotate_invalid_path_component(
-        self, agent_client: Any, auth_headers: dict
-    ) -> None:
+    def test_annotate_invalid_path_component(self, agent_client: Any, auth_headers: dict) -> None:
         _skip_if_no_fastapi()
         # Dots are rejected by _validate_path_segment
-        resp = agent_client.post(
-            "/annotate/assign.evil/sub-1", headers=auth_headers
-        )
+        resp = agent_client.post("/annotate/assign.evil/sub-1", headers=auth_headers)
         assert resp.status_code == 400

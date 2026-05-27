@@ -1,4 +1,5 @@
 """Tray launch failures must surface via the FastAPI /status endpoint."""
+
 from __future__ import annotations
 
 import time
@@ -28,9 +29,9 @@ def test_tray_thread_failure_is_captured_in_app_state(tmp_path: Path) -> None:
         # Give the daemon thread a moment to enter run() and raise.
         time.sleep(0.2)
 
-    assert fake_app.state.tray_status == "failed", (
-        f"Expected tray_status='failed', got {fake_app.state.tray_status!r}"
-    )
+    assert (
+        fake_app.state.tray_status == "failed"
+    ), f"Expected tray_status='failed', got {fake_app.state.tray_status!r}"
     # The error message should be captured for the badge's cosmetic warning.
     assert "pystray win32 backend failed" in str(getattr(fake_app.state, "tray_error", ""))
 

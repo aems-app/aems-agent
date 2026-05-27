@@ -187,7 +187,7 @@ def create_app(
                             API_VERSION,
                         )
                 except (ValueError, IndexError):
-                        logger.warning("Invalid X-AEMS-Client-Version: %s", client_version)
+                    logger.warning("Invalid X-AEMS-Client-Version: %s", client_version)
             return response
 
     class _HostHeaderMiddleware(BaseHTTPMiddleware):
@@ -227,12 +227,14 @@ def create_app(
         ) -> StarletteResponse:
             response = await call_next(request)
             if request.method == "OPTIONS":
-                wants_pna = request.headers.get(
-                    "access-control-request-private-network", ""
-                ).lower() == "true"
-                wants_lna = request.headers.get(
-                    "access-control-request-local-network", ""
-                ).lower() == "true"
+                wants_pna = (
+                    request.headers.get("access-control-request-private-network", "").lower()
+                    == "true"
+                )
+                wants_lna = (
+                    request.headers.get("access-control-request-local-network", "").lower()
+                    == "true"
+                )
                 if wants_pna:
                     response.headers["Access-Control-Allow-Private-Network"] = "true"
                 if wants_lna:
@@ -264,7 +266,9 @@ def create_app(
         cors_kwargs["allow_private_network"] = True
 
     app.add_middleware(CORSMiddleware, **cors_kwargs)
-    app.add_middleware(_HostHeaderMiddleware, allowed_hosts=_allowed_host_headers(config.host, config.port))
+    app.add_middleware(
+        _HostHeaderMiddleware, allowed_hosts=_allowed_host_headers(config.host, config.port)
+    )
     # LNA must be the outermost middleware so it sees the final response
     # headers (after CORSMiddleware has set Access-Control-Allow-Origin).
     app.add_middleware(_LNAAllowMiddleware)
