@@ -23,7 +23,7 @@ Pre-built installers — no Python needed — are on the [Releases page](https:/
 |----------|------|-------|
 | Windows | `aems-agent-setup.exe` | Installs to `%LOCALAPPDATA%\AEMS Agent` |
 | macOS   | `AEMS-Agent.dmg`       | Drag to Applications |
-| Linux   | `aems-agent-linux.tar.gz` | Extract and run `./aems-agent run` |
+| Linux   | `aems-agent-linux-x86_64.tar.gz` | Extract, run `./install.sh`, then start `aems-agent run --tray` or enable the user service |
 
 ### pip (for developers)
 
@@ -58,7 +58,7 @@ aems-agent set-path /path/to/exam/folder
 aems-agent config-dir
 ```
 
-After `aems-agent run`, open AEMS in your browser, go to **Settings → Storage**, and pair the agent.
+After `aems-agent run`, open AEMS in your browser, go to **Settings → Privacy & Storage**, and pair the agent.
 
 ## License
 

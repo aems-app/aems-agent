@@ -198,7 +198,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: aems-agent-linux
-          path: dist/aems-agent/
+          path: dist/aems-agent-linux-*.tar.gz
 
   release:
     needs: [build-windows, build-macos, build-linux]
@@ -207,10 +207,20 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
       - name: Download all artifacts
         uses: actions/download-artifact@v4
         with:
           path: artifacts/
+
+      - name: Build wheel and sdist
+        run: |
+          python -m pip install build
+          python -m build --sdist --wheel --outdir artifacts/python-dist
 
       - name: Collect release assets
         id: assets
@@ -223,10 +233,18 @@ jobs:
           if [ -f artifacts/aems-agent-macos/AEMS-Agent.dmg ]; then
             ASSETS="$ASSETS artifacts/aems-agent-macos/AEMS-Agent.dmg"
           fi
+          linux_tarball=""
           if [ -d artifacts/aems-agent-linux ]; then
-            tar -czf artifacts/aems-agent-linux.tar.gz -C artifacts aems-agent-linux
-            ASSETS="$ASSETS artifacts/aems-agent-linux.tar.gz"
+            linux_tarball=$(find artifacts/aems-agent-linux -maxdepth 1 -type f -name 'aems-agent-linux-*.tar.gz' | head -n 1)
           fi
+          if [ -n "$linux_tarball" ]; then
+            ASSETS="$ASSETS $linux_tarball"
+          fi
+          for f in artifacts/python-dist/*; do
+            if [ -f "$f" ]; then
+              ASSETS="$ASSETS $f"
+            fi
+          done
 
           : > artifacts/sha256sums.txt
           for f in $ASSETS; do
@@ -272,5 +290,5 @@ jobs:
           # shellcheck disable=SC2086
           gh release create "v${VERSION}" \
             --title "AEMS Agent v${VERSION}" \
-            --notes "AEMS Local Bridge Agent v${VERSION} - Windows (.exe), macOS (.dmg), Linux (.tar.gz), plus signed manifest/checksums." \
+            --notes "AEMS Local Bridge Agent v${VERSION} - Windows (.exe), macOS (.dmg), Linux (.tar.gz), Python wheel/sdist, plus signed manifest/checksums." \
             ${RELEASE_FILES}

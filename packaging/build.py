@@ -215,17 +215,17 @@ def build_macos_dmg(dist_path: Path) -> Path:
 def build_linux_packages(dist_path: Path) -> Path:
     """Build Linux installer artefacts: .desktop, systemd unit, and tar.gz.
 
-    The README advertises ``aems-agent-linux.tar.gz`` on the Releases page; this
+    The README advertises ``aems-agent-linux-<arch>.tar.gz`` on the Releases page; this
     function now actually produces it. The tarball contains the PyInstaller
     ``onedir`` output plus the desktop/service unit files and a small
     ``install.sh`` that wires the agent into ``~/.local/share/aems-agent`` and
     the user-systemd path. End users:
 
-        tar xzf aems-agent-linux.tar.gz
+        tar xzf aems-agent-linux-<arch>.tar.gz
         cd aems-agent-linux
         ./install.sh        # installs to ~/.local/share/aems-agent
-                            # links binary into ~/.local/bin
-                            # optionally enables the systemd user unit
+        aems-agent run --tray
+                            # or: systemctl --user enable --now aems-agent.service
     """
     linux_pkg_dir = PACKAGING_DIR / "linux"
     linux_pkg_dir.mkdir(parents=True, exist_ok=True)
@@ -297,7 +297,7 @@ echo "Optional autostart: systemctl --user enable --now aems-agent.service"
     print(f"  Linux systemd service: {service_file}")
     print(f"  Linux install script:  {install_script}")
 
-    # Bundle everything into aems-agent-linux.tar.gz so the README claim is true.
+    # Bundle everything into aems-agent-linux-<arch>.tar.gz so the README claim is true.
     import tarfile
 
     arch = platform.machine() or "x86_64"
@@ -319,7 +319,8 @@ echo "Optional autostart: systemctl --user enable --now aems-agent.service"
             "    tar xzf aems-agent-linux-*.tar.gz\n"
             "    cd aems-agent-linux\n"
             "    ./install.sh\n"
-            "    aems-agent --version\n"
+            "    aems-agent run --tray\n"
+            "    # or: systemctl --user enable --now aems-agent.service\n"
             "\n"
             "Headless boxes:\n"
             "    Set AEMS_AGENT_PIN_FILE=/run/aems-agent.pin before starting the agent\n"
