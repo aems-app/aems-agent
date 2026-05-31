@@ -11,6 +11,7 @@ Outputs:
 """
 
 import argparse
+import os
 import platform
 import shutil
 import subprocess
@@ -212,10 +213,25 @@ def build_macos_dmg(dist_path: Path) -> Path:
 
 
 def build_linux_packages(dist_path: Path) -> Path:
-    """Build Linux AppImage and .deb package."""
+    """Build Linux installer artefacts: .desktop, systemd unit, and tar.gz.
+
+    The README advertises ``aems-agent-linux.tar.gz`` on the Releases page; this
+    function now actually produces it. The tarball contains the PyInstaller
+    ``onedir`` output plus the desktop/service unit files and a small
+    ``install.sh`` that wires the agent into ``~/.local/share/aems-agent`` and
+    the user-systemd path. End users:
+
+        tar xzf aems-agent-linux.tar.gz
+        cd aems-agent-linux
+        ./install.sh        # installs to ~/.local/share/aems-agent
+                            # links binary into ~/.local/bin
+                            # optionally enables the systemd user unit
+    """
+    linux_pkg_dir = PACKAGING_DIR / "linux"
+    linux_pkg_dir.mkdir(parents=True, exist_ok=True)
+
     # Create .desktop entry
-    desktop_entry = PACKAGING_DIR / "linux" / "aems-agent.desktop"
-    desktop_entry.parent.mkdir(parents=True, exist_ok=True)
+    desktop_entry = linux_pkg_dir / "aems-agent.desktop"
     desktop_entry.write_text("""[Desktop Entry]
 Type=Application
 Name=AEMS Agent
@@ -229,7 +245,7 @@ X-GNOME-Autostart-enabled=true
 """)
 
     # Create systemd user service
-    service_file = PACKAGING_DIR / "linux" / "aems-agent.service"
+    service_file = linux_pkg_dir / "aems-agent.service"
     service_file.write_text("""[Unit]
 Description=AEMS Local Bridge Agent
 After=network.target
@@ -244,10 +260,80 @@ RestartSec=5
 WantedBy=default.target
 """)
 
-    print(f"  Linux desktop entry: {desktop_entry}")
-    print(f"  Linux systemd service: {service_file}")
+    install_script = linux_pkg_dir / "install.sh"
+    install_script.write_text("""#!/usr/bin/env bash
+# AEMS Agent — user-mode Linux installer.
+# Idempotent: re-running upgrades the install in place.
 
-    return dist_path
+set -euo pipefail
+
+here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+prefix="${AEMS_AGENT_PREFIX:-$HOME/.local/share/aems-agent}"
+bin_dir="$HOME/.local/bin"
+systemd_user_dir="$HOME/.config/systemd/user"
+
+echo "Installing AEMS Agent -> $prefix"
+mkdir -p "$prefix"
+cp -a "$here/aems-agent/." "$prefix/"
+
+mkdir -p "$bin_dir"
+ln -sf "$prefix/aems-agent" "$bin_dir/aems-agent"
+chmod +x "$prefix/aems-agent" || true
+
+mkdir -p "$systemd_user_dir"
+cp "$here/aems-agent.service" "$systemd_user_dir/aems-agent.service"
+
+case ":$PATH:" in
+    *":$bin_dir:"*) ;;
+    *) echo "Note: $bin_dir is not on PATH. Add: export PATH=\\"$bin_dir:\\$PATH\\"" ;;
+esac
+
+echo "Installed. Try: aems-agent --version"
+echo "Optional autostart: systemctl --user enable --now aems-agent.service"
+""")
+    os.chmod(install_script, 0o755)  # noqa: S103 - executable script
+
+    print(f"  Linux desktop entry:   {desktop_entry}")
+    print(f"  Linux systemd service: {service_file}")
+    print(f"  Linux install script:  {install_script}")
+
+    # Bundle everything into aems-agent-linux.tar.gz so the README claim is true.
+    import tarfile
+
+    arch = platform.machine() or "x86_64"
+    tarball = DIST_DIR / f"aems-agent-linux-{arch}.tar.gz"
+    if tarball.exists():
+        tarball.unlink()
+
+    with tarfile.open(tarball, "w:gz") as tar:
+        # The PyInstaller onedir output sits at dist_path; ship it as ./aems-agent/
+        tar.add(str(dist_path), arcname="aems-agent")
+        tar.add(str(install_script), arcname="install.sh")
+        tar.add(str(service_file), arcname="aems-agent.service")
+        tar.add(str(desktop_entry), arcname="aems-agent.desktop")
+        readme_payload = (
+            "AEMS Agent — Linux installer bundle\n"
+            "===================================\n"
+            "\n"
+            "Quick start:\n"
+            "    tar xzf aems-agent-linux-*.tar.gz\n"
+            "    cd aems-agent-linux\n"
+            "    ./install.sh\n"
+            "    aems-agent --version\n"
+            "\n"
+            "Headless boxes:\n"
+            "    Set AEMS_AGENT_PIN_FILE=/run/aems-agent.pin before starting the agent\n"
+            "    so the pairing PIN is written there on each /pair/initiate.\n"
+        ).encode("utf-8")
+        import io as _io
+
+        info = tarfile.TarInfo(name="README.txt")
+        info.size = len(readme_payload)
+        info.mode = 0o644
+        tar.addfile(info, _io.BytesIO(readme_payload))
+
+    print(f"  Linux tarball:         {tarball} ({tarball.stat().st_size} bytes)")
+    return tarball
 
 
 def main() -> None:

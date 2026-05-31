@@ -802,6 +802,52 @@ def _maybe_echo_pairing_pin(
     return True
 
 
+def _maybe_write_pairing_pin_to_file(
+    pin: str,
+    origin_header: str,
+    env: Optional[Dict[str, str]] = None,
+) -> bool:
+    """Write the PIN to ``$AEMS_AGENT_PIN_FILE`` when the env var is set.
+
+    Headless / SSH / systemd installs have no TTY, no tray, and no clipboard,
+    so the existing PIN-surfacing channels (``_maybe_echo_pairing_pin``,
+    ``_copy_pin_to_clipboard``, ``_notify_pairing_pin``) are all no-ops. This
+    helper gives ops operators a documented escape hatch: set
+    ``AEMS_AGENT_PIN_FILE=/run/aems-agent.pin`` (or any writable path) before
+    starting the agent, and each successful ``/pair/initiate`` will atomically
+    replace that file with a one-line JSON object containing the PIN, origin,
+    and expiry timestamp. File mode is forced to 0600.
+    """
+    environment = env if env is not None else os.environ
+    target = environment.get("AEMS_AGENT_PIN_FILE", "").strip()
+    if not target:
+        return False
+    path = Path(target)
+    payload = json.dumps(
+        {
+            "pin": pin,
+            "origin": origin_header,
+            "expires_in": int(_PAIRING_CHALLENGE_TTL_SECONDS),
+            "written_at": int(time.time()),
+        }
+    )
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = path.with_suffix(path.suffix + ".tmp")
+        tmp.write_text(payload + "\n", encoding="utf-8")
+        try:
+            os.chmod(tmp, 0o600)
+        except OSError:
+            # Windows or restricted filesystems may not honour chmod; the
+            # rename still succeeds and the file inherits ACLs from its parent.
+            pass
+        os.replace(tmp, path)
+    except OSError as exc:
+        logger.warning("Failed to write pairing PIN to %s: %s", path, exc)
+        return False
+    return True
+
+
 @router.put("/data/{aid}/results/{sid}.json")
 async def put_result_json(
     aid: str,
@@ -1312,6 +1358,7 @@ async def pair_initiate(
 
     logger.debug("Pairing PIN generated (origin: %s)", origin_header)
     _maybe_echo_pairing_pin(pin, origin_header)
+    _maybe_write_pairing_pin_to_file(pin, origin_header)
 
     # Put the PIN on the OS clipboard so the user can paste it directly
     # into the AEMS web UI -- the tray toast is non-interactive, so there

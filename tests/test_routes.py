@@ -2284,6 +2284,76 @@ class TestPairingClipboard:
         assert echoed is False
         assert stdout.getvalue() == ""
 
+    def test_pin_file_skipped_when_env_var_unset(self, tmp_path: Path) -> None:
+        from aems_agent import routes
+
+        ok = routes._maybe_write_pairing_pin_to_file("123456", "http://127.0.0.1:8080", env={})
+        assert ok is False
+        assert list(tmp_path.iterdir()) == []
+
+    def test_pin_file_written_when_env_var_set(self, tmp_path: Path) -> None:
+        import json as _json
+        import os as _os
+
+        from aems_agent import routes
+
+        pin_path = tmp_path / "pin.json"
+        ok = routes._maybe_write_pairing_pin_to_file(
+            "987654",
+            "http://127.0.0.1:8080",
+            env={"AEMS_AGENT_PIN_FILE": str(pin_path)},
+        )
+        assert ok is True
+        assert pin_path.exists()
+        payload = _json.loads(pin_path.read_text(encoding="utf-8"))
+        assert payload["pin"] == "987654"
+        assert payload["origin"] == "http://127.0.0.1:8080"
+        assert payload["expires_in"] == int(routes._PAIRING_CHALLENGE_TTL_SECONDS)
+        assert isinstance(payload["written_at"], int)
+
+        # POSIX permissions check (Windows tolerated)
+        if hasattr(_os, "geteuid"):
+            mode = pin_path.stat().st_mode & 0o777
+            assert mode == 0o600
+
+    def test_pin_file_overwrites_atomically(self, tmp_path: Path) -> None:
+        import json as _json
+
+        from aems_agent import routes
+
+        pin_path = tmp_path / "pin.json"
+        env = {"AEMS_AGENT_PIN_FILE": str(pin_path)}
+
+        assert routes._maybe_write_pairing_pin_to_file("111111", "http://a.example", env=env)
+        first = _json.loads(pin_path.read_text(encoding="utf-8"))
+        assert first["pin"] == "111111"
+        assert first["origin"] == "http://a.example"
+
+        assert routes._maybe_write_pairing_pin_to_file("222222", "http://b.example", env=env)
+        second = _json.loads(pin_path.read_text(encoding="utf-8"))
+        assert second["pin"] == "222222"
+        assert second["origin"] == "http://b.example"
+
+        # No stale .tmp left behind
+        tmp_leftovers = list(tmp_path.glob("*.tmp"))
+        assert tmp_leftovers == []
+
+    def test_pin_file_returns_false_on_write_error(self, tmp_path: Path, monkeypatch) -> None:
+        from aems_agent import routes
+
+        pin_path = tmp_path / "pin.json"
+
+        def _boom(*args: object, **kwargs: object) -> None:
+            raise OSError("disk full")
+
+        monkeypatch.setattr("pathlib.Path.write_text", _boom)
+        ok = routes._maybe_write_pairing_pin_to_file(
+            "555555",
+            "http://127.0.0.1:8080",
+            env={"AEMS_AGENT_PIN_FILE": str(pin_path)},
+        )
+        assert ok is False
+
 
 class TestPairingHardening:
     """Regression tests for challenge lifecycle hardening."""

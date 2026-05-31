@@ -2,6 +2,18 @@
 
 All notable changes to `aems-agent` are recorded here. Format follows [Keep a Changelog](https://keepachangelog.com/) and the project uses [SemVer](https://semver.org/).
 
+## 0.4.8 — 2026-05-31
+
+Linux-host validation pass driven from the Hetzner prod server: install + run + grading-bundle + annotation write all work on Ubuntu 24.04 / Python 3.12, but uncovered three issues that this release fixes.
+
+### Fixed
+
+- **`aems-pdf-annotator` dependency pin broadened to `>=0.2.0,<0.4.0`.** The previous `<0.3.0` ceiling blocked installation of the latest annotator (0.3.0), which is a JS-bundle-only release with no Python ABI changes (`PDFAnnotator`, `payload_to_annotations`, `SUPPORTED_CONTRACT_VERSIONS`, `ContractValidationError` all unchanged). Re-verified by grep against `aems_pdf_annotator/contract.py` in 0.3.0. Without this fix, `pip install aems-agent` together with the latest annotator wheel failed with `ResolutionImpossible`.
+
+### Added
+
+- **`AEMS_AGENT_PIN_FILE` environment variable for headless PIN reveal.** SSH-only / systemd / docker-installed agents have no TTY, no system-tray, and no clipboard, so the three existing PIN-surfacing channels (`_maybe_echo_pairing_pin`, `_copy_pin_to_clipboard`, `_notify_pairing_pin`) are all no-ops and operators can't discover the pairing PIN. When `AEMS_AGENT_PIN_FILE` is set to a writable path, every successful `/pair/initiate` atomically replaces that file with a one-line JSON object — `{"pin":..., "origin":..., "expires_in":..., "written_at":...}` — at mode 0600. Designed for `systemd` `Environment=AEMS_AGENT_PIN_FILE=/run/aems-agent.pin` style installs.
+
 ## 0.4.7 — 2026-05-27
 
 Bundle size + annotation-coordinate fixes driven by Zohar's Day-2 retest report (2026-05-26).
