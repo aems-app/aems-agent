@@ -6,7 +6,7 @@ import importlib.util
 import time
 import uuid
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any
 
 import pytest
 
@@ -2396,7 +2396,9 @@ class TestPairingHardening:
     def test_pair_complete_wrong_challenge_id_uses_generic_detail(self, agent_client: Any) -> None:
         _skip_if_no_fastapi()
         origin = "http://127.0.0.1:8080"
-        init_resp = agent_client.post(
+        # Initiate to populate _pairing_challenge; response is intentionally discarded
+        # — we need the side-effect (a PIN we then fetch via TestPairingPIN), not the body.
+        agent_client.post(
             "/pair/initiate",
             json={"origin": origin},
             headers={"Origin": origin},

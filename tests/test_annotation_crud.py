@@ -1,8 +1,7 @@
 """Tests for annotation CRUD operations."""
 
-import time
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import List
 
 import pytest
 

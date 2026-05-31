@@ -10,7 +10,6 @@ Commands:
     aems-agent config-dir                                        - Show config directory
 """
 
-import os
 import signal
 import sys
 from pathlib import Path
@@ -67,7 +66,10 @@ def _ensure_stdio_streams() -> None:
 # instantiated) sees a usable stream.
 _ensure_stdio_streams()
 
-from .config import (
+# E402: this import is deliberately below `_ensure_stdio_streams()` — config
+# imports must observe the patched stdio streams before any module in their
+# dependency chain calls `sys.stdout.isatty()` (uvicorn's logging-config path).
+from .config import (  # noqa: E402
     AGENT_VERSION,
     AgentConfig,
     ensure_auth_token,

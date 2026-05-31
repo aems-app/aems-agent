@@ -1,13 +1,12 @@
 """Tests for grading bundle generation and caching."""
 
-import json
 import base64
 from pathlib import Path
 
 import fitz  # PyMuPDF
 import pytest
 
-from aems_agent.grading_bundle import generate_bundle, get_cache_key, get_cache_path
+from aems_agent.grading_bundle import generate_bundle, get_cache_key
 
 
 @pytest.fixture

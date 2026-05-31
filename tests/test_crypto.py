@@ -2,7 +2,6 @@
 
 import os
 
-import pytest
 
 from aems_agent.crypto import (
     decrypt_sealed_box,
