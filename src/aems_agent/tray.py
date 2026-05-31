@@ -24,6 +24,7 @@ import webbrowser
 from pathlib import Path
 from typing import Any, Optional
 
+from .clipboard import copy_text_to_clipboard
 from .icons import RUNTIME_ICON_SIZE, render_status_icon
 
 logger = logging.getLogger(__name__)
@@ -206,18 +207,9 @@ def create_tray(config_dir: Path) -> Any:
     def on_show_token(icon: Any, item: Any) -> None:
         token = get_auth_token(config_dir)
         if token:
-            # Copy to clipboard if possible
-            try:
-                import tkinter as tk
-
-                root = tk.Tk()
-                root.withdraw()
-                root.clipboard_clear()
-                root.clipboard_append(token)
-                root.update()
-                root.destroy()
+            if copy_text_to_clipboard(token):
                 logger.info("Token copied to clipboard")
-            except Exception:
+            else:
                 logger.warning(
                     "Could not copy token to clipboard. Find it in: %s",
                     config_dir / "auth_token",

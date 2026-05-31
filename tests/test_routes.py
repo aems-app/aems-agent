@@ -2209,6 +2209,7 @@ class TestPairingClipboard:
         def fake_run(argv, **kwargs):
             captured["argv"] = argv
             captured["input"] = kwargs.get("input")
+            captured["text"] = kwargs.get("text")
             captured["encoding"] = kwargs.get("encoding")
 
             class _R:
@@ -2227,7 +2228,8 @@ class TestPairingClipboard:
         assert ok is True
         assert captured["argv"] == ["clip"]
         assert captured["input"] == "123456"
-        assert captured["encoding"] == "utf-16-le"
+        assert captured["text"] is True
+        assert captured["encoding"] is None
 
     def test_copy_pin_to_clipboard_returns_false_on_unsupported_platform(self, monkeypatch) -> None:
         from aems_agent import routes

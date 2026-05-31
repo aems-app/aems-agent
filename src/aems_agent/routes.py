@@ -1479,30 +1479,9 @@ def _copy_pin_to_clipboard(pin: str) -> bool:
     is silent -- the PIN is still in the tray toast and may also be echoed
     to an interactive terminal.
     """
-    import platform
-    import subprocess
+    from .clipboard import copy_text_to_clipboard
 
-    system = platform.system()
-    try:
-        if system == "Windows":
-            # `clip.exe` is built into Windows and takes stdin verbatim.
-            subprocess.run(["clip"], input=pin, encoding="utf-16-le", check=True, timeout=5)
-            return True
-        if system == "Darwin":
-            subprocess.run(["pbcopy"], input=pin, text=True, check=True, timeout=5)
-            return True
-        if system == "Linux":
-            # Try wl-copy (Wayland) then xclip (X11); both are common on
-            # desktop distros.  If neither is installed, fall through.
-            for argv in (["wl-copy"], ["xclip", "-selection", "clipboard"]):
-                try:
-                    subprocess.run(argv, input=pin, text=True, check=True, timeout=5)
-                    return True
-                except (FileNotFoundError, subprocess.CalledProcessError):
-                    continue
-    except Exception as e:  # pragma: no cover -- platform-dependent
-        logger.debug("Clipboard copy failed: %s", e)
-    return False
+    return copy_text_to_clipboard(pin)
 
 
 def _notify_pairing_pin(request: Request, pin: str, clipboard_ok: bool = False) -> None:

@@ -4,12 +4,13 @@ from __future__ import annotations
 
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from typer.testing import CliRunner
 
 from aems_agent import cli as cli_module
-from aems_agent.config import load_config
+from aems_agent.config import AgentConfig, load_config
 
 
 def test_token_command_displays_token(
@@ -84,3 +85,55 @@ def test_ensure_stdio_streams_idempotent_when_streams_exist(
     print("hello", flush=True)
     captured = capsys.readouterr()
     assert "hello" in captured.out
+
+
+def test_run_uses_main_thread_tray_helper_on_darwin(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """macOS tray mode must invert control so pystray owns the main thread."""
+    fake_app = SimpleNamespace(state=SimpleNamespace())
+    called: dict[str, object] = {}
+
+    monkeypatch.setattr(cli_module, "_setup_signal_handlers", lambda: None)
+    monkeypatch.setattr(cli_module, "get_config_dir", lambda: tmp_path)
+    monkeypatch.setattr(cli_module, "load_config", lambda _: AgentConfig())
+    monkeypatch.setattr(cli_module, "save_config", lambda config, config_dir: None)
+    monkeypatch.setattr(cli_module, "ensure_auth_token", lambda config_dir: "token")
+    monkeypatch.setattr(cli_module, "_preflight_port_or_die", lambda host, port: None)
+    monkeypatch.setattr(cli_module, "find_spec", lambda name: object())
+    monkeypatch.setattr(
+        cli_module,
+        "platform",
+        SimpleNamespace(system=lambda: "Darwin"),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        cli_module,
+        "_run_with_tray_on_main_thread",
+        lambda config_dir, agent_app, host, port: called.setdefault(
+            "main_thread",
+            (config_dir, agent_app, host, port),
+        ),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        cli_module,
+        "_start_tray",
+        lambda config_dir, agent_app=None: called.setdefault("threaded_tray", True),
+    )
+    monkeypatch.setitem(
+        sys.modules,
+        "uvicorn",
+        SimpleNamespace(run=lambda *args, **kwargs: called.setdefault("uvicorn", True)),
+    )
+    monkeypatch.setitem(
+        sys.modules,
+        "aems_agent.app",
+        SimpleNamespace(create_app=lambda config_dir: fake_app),
+    )
+
+    cli_module.run(port=61234, host="127.0.0.1", tray=True, launch_from_uri=None)
+
+    assert called.get("main_thread") == (tmp_path, fake_app, "127.0.0.1", 61234)
+    assert "threaded_tray" not in called

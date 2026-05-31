@@ -120,8 +120,10 @@ exe = EXE(
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
-    upx=True,
-    console=False if sys.platform == 'win32' else True,
+    # Avoid UPX-packed binaries for end-user builds. Native PDF/crypto/image
+    # dependencies are more reliable unpacked, and AV heuristics are calmer.
+    upx=False,
+    console=False if sys.platform in {'win32', 'darwin'} else True,
     disable_windowed_traceback=False,
     argv_emulation=False,
     target_arch=None,
@@ -136,7 +138,7 @@ coll = COLLECT(
     a.zipfiles,
     a.datas,
     strip=False,
-    upx=True,
+    upx=False,
     upx_exclude=[],
     name='aems-agent',
 )

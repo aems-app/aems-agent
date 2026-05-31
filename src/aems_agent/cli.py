@@ -12,6 +12,9 @@ Commands:
 
 import signal
 import sys
+from importlib.util import find_spec
+import platform
+import threading
 from pathlib import Path
 from typing import Any, Optional
 
@@ -132,9 +135,7 @@ def run(
     ),
 ) -> None:
     """Start the AEMS Local Bridge Agent."""
-    try:
-        import uvicorn  # type: ignore
-    except ImportError:
+    if find_spec("uvicorn") is None:
         typer.echo(
             "Error: uvicorn not installed. Run: pip install aems-agent",
             err=True,
@@ -175,11 +176,80 @@ def run(
 
     agent_app = create_app(config_dir)
 
-    # Start system tray in a separate thread if requested
+    # pystray's Cocoa backend must own the main thread on macOS. Other
+    # platforms keep uvicorn on the main thread and the tray in the
+    # background as before.
     if tray:
+        if _tray_requires_main_thread():
+            _run_with_tray_on_main_thread(config_dir, agent_app, host, port)
+            return
         _start_tray(config_dir, agent_app)
 
+    _run_uvicorn_server(agent_app, host, port)
+
+
+def _tray_requires_main_thread() -> bool:
+    """Return whether the platform tray backend must own the main thread."""
+    return platform.system() == "Darwin"
+
+
+def _set_tray_state(agent_app: Optional[FastAPI], status: str, error: Optional[str] = None) -> None:
+    """Update tray status fields when a FastAPI app is available."""
+    if agent_app is None:
+        return
+    agent_app.state.tray_status = status
+    agent_app.state.tray_error = error
+
+
+def _prepare_tray_icon(config_dir: Path, agent_app: Optional[FastAPI]) -> Any:
+    """Construct the tray icon and wire tray notification state into the app."""
+    from .tray import create_tray
+
+    icon: Any = create_tray(config_dir)
+    notifier = getattr(icon, "_aems_pin_notifier", None)
+    if notifier is not None and agent_app is not None:
+        agent_app.state.tray_notifier = notifier
+    _set_tray_state(agent_app, "starting")
+    return icon
+
+
+def _run_uvicorn_server(agent_app: FastAPI, host: str, port: int) -> None:
+    """Run uvicorn for the FastAPI app."""
+    import uvicorn  # type: ignore
+
     uvicorn.run(agent_app, host=host, port=port, log_level="info")
+
+
+def _run_with_tray_on_main_thread(
+    config_dir: Path,
+    agent_app: FastAPI,
+    host: str,
+    port: int,
+) -> None:
+    """Start uvicorn in a worker thread so macOS can run the tray on main."""
+    try:
+        from .tray import run_icon_safely
+
+        icon = _prepare_tray_icon(config_dir, agent_app)
+        server_thread = threading.Thread(
+            target=_run_uvicorn_server,
+            args=(agent_app, host, port),
+            daemon=False,
+            name="aems-uvicorn",
+        )
+        server_thread.start()
+        _set_tray_state(agent_app, "running")
+        typer.echo("  System tray: enabled")
+        run_icon_safely(icon, agent_app)
+    except ImportError:
+        _set_tray_state(agent_app, "unavailable", "pystray not installed")
+        typer.echo(
+            "  System tray: unavailable (install pystray: pip install pystray pillow)",
+            err=True,
+        )
+    except Exception as exc:
+        _set_tray_state(agent_app, "failed", str(exc))
+        typer.echo(f"  System tray: failed to start ({exc})", err=True)
 
 
 def _preflight_port_or_die(host: str, port: int) -> None:
@@ -259,20 +329,9 @@ def _start_tray(config_dir: Path, agent_app: Optional[FastAPI] = None) -> None:
     * ``"unavailable"`` — ``pystray`` not installed.
     """
     try:
-        from .tray import create_tray, run_icon_safely
+        from .tray import run_icon_safely
 
-        import threading
-
-        icon: Any = create_tray(config_dir)
-
-        # Wire PIN notifier into FastAPI app state if available
-        notifier = getattr(icon, "_aems_pin_notifier", None)
-        if notifier is not None and agent_app is not None:
-            agent_app.state.tray_notifier = notifier
-
-        if agent_app is not None:
-            agent_app.state.tray_status = "starting"
-            agent_app.state.tray_error = None
+        icon = _prepare_tray_icon(config_dir, agent_app)
 
         thread = threading.Thread(
             target=run_icon_safely,
@@ -282,23 +341,17 @@ def _start_tray(config_dir: Path, agent_app: Optional[FastAPI] = None) -> None:
         )
         thread.start()
 
-        if agent_app is not None:
-            agent_app.state.tray_status = "running"
-
+        _set_tray_state(agent_app, "running")
         typer.echo("  System tray: enabled")
     except ImportError:
-        if agent_app is not None:
-            agent_app.state.tray_status = "unavailable"
-            agent_app.state.tray_error = "pystray not installed"
+        _set_tray_state(agent_app, "unavailable", "pystray not installed")
         typer.echo(
             "  System tray: unavailable (install pystray: pip install pystray pillow)",
             err=True,
         )
-    except Exception as e:
-        if agent_app is not None:
-            agent_app.state.tray_status = "failed"
-            agent_app.state.tray_error = str(e)
-        typer.echo(f"  System tray: failed to start ({e})", err=True)
+    except Exception as exc:
+        _set_tray_state(agent_app, "failed", str(exc))
+        typer.echo(f"  System tray: failed to start ({exc})", err=True)
 
 
 @app.command()

@@ -5,7 +5,8 @@ Platform-aware configuration management for the AEMS Local Bridge Agent.
 
 Config directory:
     - Windows: %APPDATA%\\AEMS\\agent\\
-    - Linux/Mac: ~/.config/aems/agent/
+    - macOS: ~/Library/Application Support/AEMS/agent/
+    - Linux: ~/.config/aems/agent/
 
 Stores:
     - config.json: storage_path, port, allowed_origins
@@ -23,6 +24,7 @@ from typing import List, Optional
 from pydantic import BaseModel, Field, field_validator
 
 logger = logging.getLogger(__name__)
+
 
 def _resolve_agent_version() -> str:
     """Best-effort lookup of the agent version.

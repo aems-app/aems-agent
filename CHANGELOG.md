@@ -2,6 +2,17 @@
 
 All notable changes to `aems-agent` are recorded here. Format follows [Keep a Changelog](https://keepachangelog.com/) and the project uses [SemVer](https://semver.org/).
 
+## 0.4.9 — 2026-05-31
+
+Follow-up patch release fixing real defects discovered after `0.4.8` shipped: an oversized sdist regression in the published release, a macOS tray-thread crash, fragile per-platform clipboard handling, and a couple of packaging hygiene items.
+
+### Fixed
+
+- **Sdist no longer sweeps PyInstaller/release artifacts.** The `0.4.8` source distribution on PyPI/GitHub was 318 MB because Hatch's default sdist included the CI runner's `dist/` and `build/` directories. `pyproject.toml` now declares an explicit `[tool.hatch.build.targets.sdist] only-include` allow-list (`src`, `tests`, `packaging`, project metadata files). The release workflow also runs the Python `sdist`/wheel step *before* downloading the per-platform PyInstaller artifacts, so the working tree is clean when the sdist is built.
+- **`--tray` no longer crashes on macOS.** `pystray.Icon.run()` must own the main thread on Darwin (the AppKit run loop is main-thread-only). On macOS the agent now inverts control: uvicorn runs on a worker thread and the tray icon runs on the main thread; on Windows/Linux the existing daemon-thread layout is preserved.
+- **Clipboard handling unified behind a single native helper.** The previous Windows path piped text into `clip` as `utf-16-le` and the Tk fallback in the tray's token-copy action created hidden root windows on a worker thread. `src/aems_agent/clipboard.py` now wraps `clip` / `pbcopy` / `wl-copy` / `xclip` with conservative defaults; pairing-PIN copy and the tray "Copy token" menu item both route through it.
+- **Packaging hygiene.** PyInstaller spec now disables UPX (which trips multiple AVs on Windows) and builds macOS as `windowed=True` (no spurious Terminal window when launched from Finder). Stale macOS docstring in `config.py` corrected.
+
 ## 0.4.8 — 2026-05-31
 
 Linux-host validation pass driven from the Hetzner prod server: install + run + grading-bundle + annotation write all work on Ubuntu 24.04 / Python 3.12, but uncovered three issues that this release fixes.
