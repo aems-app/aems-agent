@@ -92,7 +92,7 @@ def render_status_icon(color: str = "green", size: int = RUNTIME_ICON_SIZE) -> A
     # Composite the AEMS glyph in white on top of the badge.
     glyph_size = max(1, round(size * (1 - 2 * _GLYPH_INSET_RATIO)))
     glyph_origin = (size - glyph_size) // 2
-    alpha = _load_logo_alpha().resize((glyph_size, glyph_size), Image.LANCZOS)
+    alpha = _load_logo_alpha().resize((glyph_size, glyph_size), Image.Resampling.LANCZOS)
 
     white = Image.new("RGBA", (glyph_size, glyph_size), (255, 255, 255, 255))
     img.paste(white, (glyph_origin, glyph_origin), alpha)

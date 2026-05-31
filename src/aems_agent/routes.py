@@ -1344,7 +1344,10 @@ async def pair_initiate(
     async with _pairing_lock:
         if _pairing_challenge and now <= float(_pairing_challenge["expires_at"]):
             expires_in = max(1, int(float(_pairing_challenge["expires_at"]) - now))
-            return JSONResponse(
+            # FastAPI accepts a JSONResponse here at runtime; the declared
+            # return type is kept as Dict[str, Any] so the OpenAPI/Pydantic
+            # response_model inference for the success path stays clean.
+            return JSONResponse(  # type: ignore[return-value]
                 status_code=409,
                 content={"detail": "Pairing already in progress", "expires_in": expires_in},
             )

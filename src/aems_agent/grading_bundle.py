@@ -74,7 +74,7 @@ def _page_has_formulas(text: str) -> bool:
     return math_score >= 10
 
 
-def _page_has_images(page) -> bool:
+def _page_has_images(page: Any) -> bool:
     """Return True if the PDF page contains embedded images or drawings."""
     try:
         return len(page.get_images(full=False)) > 0 or len(page.get_drawings()) > 0

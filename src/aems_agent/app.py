@@ -17,7 +17,7 @@ import logging
 import logging.handlers
 import os
 from pathlib import Path
-from typing import Awaitable, Callable, Optional
+from typing import Any, Awaitable, Callable, Dict, Optional
 
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -247,7 +247,7 @@ def create_app(
     # all_origins is a mutable list — routes.py appends to it after pairing,
     # which takes effect immediately because CORSMiddleware checks
     # `origin in self.allow_origins` on every request.
-    cors_kwargs = {
+    cors_kwargs: Dict[str, Any] = {
         "allow_origins": all_origins,
         "allow_origin_regex": _localhost_origin_re,
         "allow_credentials": False,
@@ -266,8 +266,13 @@ def create_app(
         cors_kwargs["allow_private_network"] = True
 
     app.add_middleware(CORSMiddleware, **cors_kwargs)
+    # Starlette's _MiddlewareFactory typing models ASGI-style middlewares;
+    # _HostHeaderMiddleware uses Starlette's BaseHTTPMiddleware which has
+    # a different __init__ shape. add_middleware still calls cls(app, **kw)
+    # at runtime so the wiring is correct.
     app.add_middleware(
-        _HostHeaderMiddleware, allowed_hosts=_allowed_host_headers(config.host, config.port)
+        _HostHeaderMiddleware,  # type: ignore[arg-type]
+        allowed_hosts=_allowed_host_headers(config.host, config.port),
     )
     # LNA must be the outermost middleware so it sees the final response
     # headers (after CORSMiddleware has set Access-Control-Allow-Origin).
