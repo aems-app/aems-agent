@@ -226,30 +226,41 @@ def _run_with_tray_on_main_thread(
     host: str,
     port: int,
 ) -> None:
-    """Start uvicorn in a worker thread so macOS can run the tray on main."""
+    """Start uvicorn in a worker thread so macOS can run the tray on main.
+
+    If the tray fails to construct (missing pystray, AppKit init error, etc.)
+    we still want the agent serving — matching the Windows/Linux behaviour
+    where `_start_tray` failures are non-fatal. In that case we fall back to
+    running uvicorn directly on the main thread.
+    """
     try:
         from .tray import run_icon_safely
 
         icon = _prepare_tray_icon(config_dir, agent_app)
-        server_thread = threading.Thread(
-            target=_run_uvicorn_server,
-            args=(agent_app, host, port),
-            daemon=False,
-            name="aems-uvicorn",
-        )
-        server_thread.start()
-        _set_tray_state(agent_app, "running")
-        typer.echo("  System tray: enabled")
-        run_icon_safely(icon, agent_app)
     except ImportError:
         _set_tray_state(agent_app, "unavailable", "pystray not installed")
         typer.echo(
             "  System tray: unavailable (install pystray: pip install pystray pillow)",
             err=True,
         )
+        _run_uvicorn_server(agent_app, host, port)
+        return
     except Exception as exc:
         _set_tray_state(agent_app, "failed", str(exc))
         typer.echo(f"  System tray: failed to start ({exc})", err=True)
+        _run_uvicorn_server(agent_app, host, port)
+        return
+
+    server_thread = threading.Thread(
+        target=_run_uvicorn_server,
+        args=(agent_app, host, port),
+        daemon=False,
+        name="aems-uvicorn",
+    )
+    server_thread.start()
+    _set_tray_state(agent_app, "running")
+    typer.echo("  System tray: enabled")
+    run_icon_safely(icon, agent_app)
 
 
 def _preflight_port_or_die(host: str, port: int) -> None:

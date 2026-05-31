@@ -8,6 +8,10 @@ __pycache__/
 dist/
 build/
 .eggs/
+# CI-only: actions/download-artifact writes per-platform PyInstaller output
+# here. Left untracked so a local rebuild + sdist still produces a clean
+# 113 KB sdist (was 318 MB on v0.4.8 before the sdist allow-list landed).
+artifacts/
 
 # Virtual environments
 venv/

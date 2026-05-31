@@ -2,6 +2,21 @@
 
 All notable changes to `aems-agent` are recorded here. Format follows [Keep a Changelog](https://keepachangelog.com/) and the project uses [SemVer](https://semver.org/).
 
+## 0.4.10 — 2026-05-31
+
+Repo hygiene + two real CI regressions surfaced by the v0.4.9 review.
+
+### Fixed
+
+- **`tests/test_packaging.py` import error on Python 3.10.** The new packaging-regression test added in v0.4.9 imported `tomllib` unconditionally; `tomllib` is stdlib only on Python 3.11+, and the project's `requires-python = ">=3.10"` means CI's 3.10 matrix entry failed test collection. The import now falls back to `tomli` on 3.10 and the dev extras pin `tomli>=2.0; python_version < "3.11"`.
+- **macOS `--tray` no longer silently fails to start uvicorn.** In v0.4.9, if `_prepare_tray_icon()` raised before the server thread started (missing `pystray`, AppKit init error, …), the Darwin code path exited without ever calling `uvicorn.run()` — diverging from Windows/Linux, where a tray failure is non-fatal. The macOS branch now falls back to running uvicorn directly on the main thread when tray setup fails.
+
+### Internal
+
+- **Black formatting normalised across `src/` and `tests/`.** v0.4.8 + v0.4.9 left two pre-existing `black --check` violations on `src/aems_agent/config.py` (long `allowed_origins` lambda) and `tests/test_release_metadata.py`. Both now pass `black --check`, restoring the `lint` CI job to green on `main`.
+- **`.gitattributes` added with `* text=auto eol=lf`.** The v0.4.9 edits mixed LF lines into files that were previously 100% CRLF (cli.py, tray.py, config.py, routes.py), producing noisy diffs. All tracked text files have been renormalised to LF in the index, and the new `.gitattributes` keeps cross-platform contributors aligned. Windows scripts (`.bat`, `.cmd`, `.ps1`) stay CRLF.
+- **`.gitignore` now excludes `artifacts/`.** Defensive complement to the sdist allow-list — even if a future Hatch upgrade re-introduces `auto-discovery` for sdists, the CI `download-artifact` output directory will not leak into a tarball. (Post-mortem correction: the v0.4.9 CHANGELOG attributed the 318 MB sdist bloat to `dist/` + `build/`; both were already gitignored. The real culprit was `artifacts/`, which `actions/download-artifact` creates at workflow time and was not gitignored prior to this release.)
+
 ## 0.4.9 — 2026-05-31
 
 Follow-up patch release fixing real defects discovered after `0.4.8` shipped: an oversized sdist regression in the published release, a macOS tray-thread crash, fragile per-platform clipboard handling, and a couple of packaging hygiene items.

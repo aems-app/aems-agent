@@ -2,8 +2,13 @@
 
 from __future__ import annotations
 
+import sys
 from pathlib import Path
-import tomllib
+
+if sys.version_info >= (3, 11):
+    import tomllib
+else:  # pragma: no cover - Python 3.10 backport path
+    import tomli as tomllib
 
 
 def test_pyproject_explicitly_scopes_sdist_contents() -> None:

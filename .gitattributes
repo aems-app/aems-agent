@@ -1,0 +1,38 @@
+# Normalise line endings for all text files in this repo.
+# Python sources are stored with LF in the tree; checkouts on Windows
+# get LF-on-disk too (Python handles them transparently via universal
+# newlines). Prevents the CRLF/LF blob mixing seen on v0.4.9.
+* text=auto eol=lf
+
+# Per-extension overrides for cross-platform sanity:
+*.py        text eol=lf
+*.toml      text eol=lf
+*.yml       text eol=lf
+*.yaml      text eol=lf
+*.md        text eol=lf
+*.sh        text eol=lf
+*.cfg       text eol=lf
+*.ini       text eol=lf
+*.json      text eol=lf
+
+# Windows-only files that should stay CRLF.
+*.bat       text eol=crlf
+*.cmd       text eol=crlf
+*.ps1       text eol=crlf
+
+# Binaries — never touch.
+*.png       binary
+*.jpg       binary
+*.jpeg      binary
+*.webp      binary
+*.ico       binary
+*.icns      binary
+*.gif       binary
+*.pdf       binary
+*.gz        binary
+*.zip       binary
+*.exe       binary
+*.dmg       binary
+*.dll       binary
+*.so        binary
+*.dylib     binary
