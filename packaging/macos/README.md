@@ -1,17 +1,20 @@
 # macOS Packaging
 
-The macOS `.app` bundle and `AEMS-Agent.dmg` are produced by
-`packaging/build.py` (locally on a Mac) or by `.github/workflows/build.yml`
-on every tagged release.
+The macOS `.app` bundle and `AEMS-Agent.dmg` are produced by PyInstaller's
+`BUNDLE` directive in `packaging/aems-agent.spec` (see v0.4.13 changelog for
+why we no longer hand-assemble the bundle), wrapped into a DMG by
+`packaging/build.py` (locally on a Mac) or by `.github/workflows/build.yml` on
+every tagged release.
 
 ## What ships in the DMG
 
 - `AEMS Agent.app/`
-  - `Contents/MacOS/aems-agent` — PyInstaller `onedir` binary
-  - `Contents/MacOS/_internal/…` — bundled libraries
+  - `Contents/MacOS/aems-agent` — the PyInstaller launcher
+  - `Contents/Frameworks/` — bundled shared libraries (PyInstaller 6.20+
+    relocates them here so `codesign` walks the tree cleanly)
   - `Contents/Resources/aems-agent.icns` — multi-resolution app icon
-    (16, 32, 64, 128, 256, 512, 1024 px slots so Finder and the Dock
-    look crisp at every zoom)
+    (16, 32, 64, 128, 256, 512, 1024 px slots + retina @2x so Finder and
+    the Dock look crisp at every zoom)
   - `Contents/Info.plist` — `CFBundleIconFile=aems-agent`,
     `NSHighResolutionCapable=true`, `LSUIElement=true`
     (background-only / no Dock entry)
@@ -23,32 +26,65 @@ The build pipeline supports two signing tiers:
 
 ### Tier 1 — Ad-hoc signed (default)
 
-`codesign --force --deep --sign - "dist/AEMS Agent.app"`
+PyInstaller's `BUNDLE` directive already ad-hoc signs every collected binary
+and the `.app` wrapper during build, so CI only needs to verify:
 
-This is what ships when the repo has no Apple Developer ID secrets
-configured. It satisfies Apple Silicon's `kCSRequireSignature`
-requirement (the app will at least *launch*) but Gatekeeper still
-refuses on first run because the signature has no anchor in Apple's
-PKI.
+```bash
+codesign --verify --deep --strict --verbose=2 "dist/AEMS Agent.app"
+```
+
+This satisfies Apple Silicon's `kCSRequireSignature` requirement (every Mach-O
+in the bundle carries a signature) but Gatekeeper still refuses to open the app
+without user intervention on first launch, because the ad-hoc signature has no
+anchor in Apple's PKI. macOS surfaces this as one of:
+
+- "AEMS Agent" can't be opened because Apple cannot check it for malicious
+  software. (Sequoia and later)
+- "AEMS Agent" is from an unidentified developer. (older macOS)
 
 **User-facing first-launch flow (must appear in every download surface):**
 
-1. Open `AEMS-Agent.dmg` and drag **AEMS Agent** to Applications.
-2. Right-click (Control-click) AEMS Agent in Applications → **Open**.
+The exact path depends on the macOS version. Both paths must be documented;
+right-click → Open is no longer the documented reliable bypass on macOS 15
+Sequoia.
+
+**On macOS 15 Sequoia and later** — preferred path:
+
+1. Drag **AEMS Agent** from the mounted DMG to **Applications**.
+2. Double-click **AEMS Agent**. Dismiss the warning that appears.
+3. Open **System Settings → Privacy & Security**.
+4. Scroll to the **Security** section.
+5. Click **Open / Open Anyway** next to AEMS Agent. Authenticate if prompted.
+6. Launch AEMS Agent again and confirm **Open** in the new dialog.
+
+Apple only keeps the **Open Anyway** button visible for about an hour after
+the failed launch attempt; users should do this step right after the warning
+appears.
+
+**On macOS 11 Big Sur through macOS 14 Sonoma:**
+
+1. Drag **AEMS Agent** from the mounted DMG to **Applications**.
+2. Right-click (or Control-click) AEMS Agent → **Open**.
 3. Confirm the "from an unidentified developer" warning by clicking
    **Open** again.
-4. After this one-time approval the app launches normally forever.
 
-If the user's browser flagged the DMG as quarantined and the
-right-click path still fails, the fallback is:
+**Quarantine fallback (advanced, any macOS version):**
+
+If Gatekeeper still blocks the app because the download carries the
+`com.apple.quarantine` extended attribute, the fallback is:
 
 ```bash
 xattr -dr com.apple.quarantine "/Applications/AEMS Agent.app"
+open "/Applications/AEMS Agent.app"
 ```
 
-This is the same shipping model used by Calibre's free build, OBS
-Studio before 2020, HandBrake (historic), MacDown, and most open-source
-macOS apps that don't pay for the Apple Developer Program.
+This is a **quarantine fallback** only. It will not fix a genuinely broken
+bundle, an invalid signature, the wrong architecture, or a system policy that
+blocks unsigned software.
+
+This is the same shipping model used by Calibre's free build, OBS Studio
+before 2020, HandBrake (historic), MacDown, and most open-source macOS apps
+that don't pay for the Apple Developer Program.
 
 ### Tier 2 — Developer ID + notarized
 

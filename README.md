@@ -29,27 +29,55 @@ Pre-built installers — no Python needed — are on the [Releases page](https:/
 
 The macOS download is signed with a **free ad-hoc signature**, not an Apple
 Developer ID (we are not in the Apple Developer Program). That means macOS
-Gatekeeper will refuse to open the app on a normal double-click and may show
-"AEMS Agent is damaged" or "from an unidentified developer". You only need to
-do this **once**:
+Gatekeeper will refuse to open the app on a normal double-click and warns that
+it cannot verify the publisher. You only need to clear this **once**; the path
+depends on which macOS version you are on.
+
+##### macOS 15 Sequoia (and later) — preferred path
+
+Apple changed the Gatekeeper bypass UX in Sequoia, so right-click → Open is
+no longer the documented reliable path on Sequoia.
+
+1. Open the downloaded `AEMS-Agent.dmg` and drag **AEMS Agent** to Applications.
+2. Double-click **AEMS Agent**. Dismiss the warning that appears.
+3. Open **System Settings → Privacy & Security**.
+4. Scroll to the **Security** section. You should see a notice that AEMS Agent
+   was blocked.
+5. Click **Open / Open Anyway** next to AEMS Agent. Authenticate with Touch ID
+   or your password if prompted.
+6. Launch AEMS Agent again and confirm **Open** in the new dialog.
+
+After that the app runs normally on subsequent launches.
+
+> Apple only keeps the **Open Anyway** button available for about an hour after
+> the failed launch attempt, so do this step right after you see the warning.
+
+##### macOS 11 Big Sur through macOS 14 Sonoma
 
 1. Open the downloaded `AEMS-Agent.dmg` and drag **AEMS Agent** to Applications.
 2. In **Applications**, **right-click** (or Control-click) AEMS Agent → **Open**.
 3. Confirm the warning dialog by clicking **Open** again.
 
-After that first launch the app runs normally and macOS remembers your choice.
+After that the app runs normally; macOS remembers your choice.
 
-If macOS still refuses, the download was likely quarantined by your browser.
-Run this once in Terminal:
+##### Quarantine fallback (advanced)
+
+If Gatekeeper still blocks the app because of the download **quarantine**
+attribute that browsers attach to files, you can clear it from Terminal:
 
 ```bash
 xattr -dr com.apple.quarantine "/Applications/AEMS Agent.app"
+open "/Applications/AEMS Agent.app"
 ```
 
-If you've never seen this before: this is the same flow every free macOS app
-without a $99/yr Apple Developer ID uses — Calibre, OBS Studio, MacDown,
-HandBrake (historically), etc. It's not a virus warning; it's a "we couldn't
-verify the publisher's identity" warning.
+This is a **quarantine fallback**, not a universal fix. It will not help if
+the bundle is genuinely broken, the signature is invalid, the binary is for
+the wrong architecture, or a system policy blocks unsigned software.
+
+If you've never seen this before: this is the same first-launch flow every
+free macOS app without a $99/yr Apple Developer ID uses — Calibre, OBS Studio,
+MacDown, HandBrake (historically), etc. It's not a virus warning; it's a
+"we couldn't verify the publisher's identity" warning.
 
 ### pip (for developers)
 
