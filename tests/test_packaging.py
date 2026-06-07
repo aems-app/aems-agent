@@ -101,6 +101,55 @@ def test_workflow_relies_on_pyinstaller_signing_when_developer_id_absent() -> No
     )
 
 
+def test_launcher_defaults_finder_double_click_to_run_tray(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Frozen macOS .app launched from Finder must default argv to `run --tray`.
+
+    The Apple tester on v0.4.13–v0.4.15 saw "double-click does nothing"
+    because the .app bundle declares ``LSUIElement=True`` and the
+    PyInstaller entry script (``packaging/launcher.py``) called
+    ``aems_agent.cli.main()`` with the raw argv. Typer requires a
+    subcommand, so the process exited immediately with "Missing
+    command." — no window, no tray icon, no visible feedback. This
+    regression-guards that the launcher rewrites no-arg Finder
+    invocations into ``run --tray`` on darwin only.
+    """
+    import importlib
+    import sys as _sys
+
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "packaging"))
+    launcher = importlib.import_module("launcher")
+
+    # Finder double-click on darwin: frozen, darwin, no args.
+    monkeypatch.setattr(_sys, "frozen", True, raising=False)
+    monkeypatch.setattr(launcher.platform, "system", lambda: "Darwin")
+    monkeypatch.setattr(_sys, "argv", ["/Applications/AEMS Agent.app/Contents/MacOS/aems-agent"])
+    assert launcher._is_frozen_macos_finder_launch() is True
+
+    # Terminal invocation with subcommand: leave argv alone.
+    monkeypatch.setattr(_sys, "argv", ["aems-agent", "run", "--tray"])
+    assert launcher._is_frozen_macos_finder_launch() is False
+
+    # CLI with --version (the CI smoke test): also has length > 1, do not rewrite.
+    monkeypatch.setattr(_sys, "argv", ["aems-agent", "--version"])
+    assert launcher._is_frozen_macos_finder_launch() is False
+
+    # Non-frozen invocation (dev mode): do not rewrite.
+    monkeypatch.setattr(_sys, "frozen", False, raising=False)
+    monkeypatch.setattr(_sys, "argv", ["launcher"])
+    assert launcher._is_frozen_macos_finder_launch() is False
+
+    # Linux/Windows frozen no-arg invocation: do not rewrite (Windows
+    # NSIS installer / Linux launchers handle CLI args explicitly).
+    monkeypatch.setattr(_sys, "frozen", True, raising=False)
+    monkeypatch.setattr(launcher.platform, "system", lambda: "Linux")
+    monkeypatch.setattr(_sys, "argv", ["aems-agent"])
+    assert launcher._is_frozen_macos_finder_launch() is False
+    monkeypatch.setattr(launcher.platform, "system", lambda: "Windows")
+    assert launcher._is_frozen_macos_finder_launch() is False
+
+
 def test_workflow_smoke_tests_frozen_macos_app_before_signing() -> None:
     """The macOS release job should execute the frozen app before signing/DMG steps.
 

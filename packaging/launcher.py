@@ -13,7 +13,36 @@ This wrapper imports the CLI through its fully-qualified package name
 so the relative imports inside the package work normally.
 """
 
+import platform
+import sys
+
 from aems_agent.cli import main
 
+
+def _is_frozen_macos_finder_launch() -> bool:
+    """Return True when the frozen .app was launched by Finder with no args.
+
+    The bundle declares ``LSUIElement=True``, which means a Finder
+    double-click on ``AEMS Agent.app`` invokes ``Contents/MacOS/aems-agent``
+    directly with no subcommand. The Typer CLI requires a subcommand, so
+    without this guard the process exits immediately with "Missing
+    command." and the user sees no window, no tray icon, and no error
+    dialog (because we are LSUIElement). That is exactly the
+    "double-click does nothing" symptom Apple testers reported.
+
+    The PyInstaller spec sets ``argv_emulation=False``, so Finder
+    double-clicks land here with ``sys.argv == [executable_path]`` — no
+    ``-psn_X_Y`` stragglers to strip. Anything longer means the user
+    invoked the binary from Terminal with arguments, which we leave
+    alone.
+    """
+    return getattr(sys, "frozen", False) and platform.system() == "Darwin" and len(sys.argv) <= 1
+
+
 if __name__ == "__main__":
+    if _is_frozen_macos_finder_launch():
+        # Default a no-arg macOS Finder launch into `run --tray` so the
+        # bundle boots the menu-bar agent. This mirrors what
+        # ``com.aems.agent.plist`` LaunchAgent does at login.
+        sys.argv.extend(["run", "--tray"])
     main()

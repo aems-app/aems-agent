@@ -2,6 +2,25 @@
 
 All notable changes to `aems-agent` are recorded here. Format follows [Keep a Changelog](https://keepachangelog.com/) and the project uses [SemVer](https://semver.org/).
 
+## 0.4.16 — 2026-06-07
+
+Critical macOS-only fix. The Apple tester on v0.4.13/v0.4.14/v0.4.15 got past Gatekeeper via the documented Sequoia path but then reported that double-clicking `AEMS Agent.app` did nothing visible. Codex traced this to a single launcher gap.
+
+### Fixed
+
+- **Frozen macOS `.app` double-click now actually starts the agent.** The bundle declares `LSUIElement=true` (no Dock entry), and Finder double-clicks invoked `Contents/MacOS/aems-agent` with no subcommand. The Typer CLI requires a subcommand, so the process exited immediately with `Missing command.` — and because `LSUIElement` suppresses Dock + window UI, the user saw absolutely nothing happen. `packaging/launcher.py` now detects "frozen + darwin + no args" and rewrites `sys.argv` to `["run", "--tray"]` before invoking `aems_agent.cli.main()`, mirroring what the `com.aems.agent.plist` LaunchAgent does at login. Terminal invocations with arguments, `--version`, Linux/Windows frozen invocations, and dev-mode (non-frozen) invocations are all left alone.
+
+### Internal
+
+- New regression `test_launcher_defaults_finder_double_click_to_run_tray` covers the rewrite predicate across all six cases (frozen+darwin+0-args, frozen+darwin+subcommand, frozen+darwin+`--version`, non-frozen, frozen+Linux, frozen+Windows). If a future maintainer flattens the launcher again, the suite fires.
+
+### Known follow-ups (NOT in this release — Codex review identified, deferred)
+
+- The web's `_isLoopbackPermissionError` heuristic in `aems-web/src/aems/web/static/js/core/agent-discovery.js` returns `true` for a bare `TypeError: Failed to fetch` from a public-HTTPS origin to loopback. That's also what happens when the agent isn't running at all (connection refused). So Sofia's "agent never started" symptom got surfaced as "Blocked by browser" — wrong root-cause attribution. v0.4.16 fixes the underlying "agent never started" problem, so this mislabel stops firing for her, but the heuristic remains overly permissive for users whose agent legitimately is down.
+- The `targetAddressSpace: 'loopback'` fetch option is set across 14 sites in `aems-web` (discovery / badge / launch / settings / global probe) while `aems-web`'s `local-mode/download-orchestrator.js` explicitly omits it with a comment saying Chrome 148+ rejects requests that declare it. This contradiction across the codebase should be unified to the omission strategy in a follow-up.
+- No macOS `CFBundleURLTypes` for an `aems-agent://` scheme yet — Windows installer registers it, macOS doesn't, so any future "Launch agent from browser" UX is incomplete on macOS.
+- Paid-path `codesign --force --deep` carryover from v0.4.13 untouched (needs real macOS Developer ID host for inside-out rewrite per TN2206).
+
 ## 0.4.15 — 2026-06-07
 
 Patch release after Codex caught that the v0.4.14 CI build failed before the release artifacts published: the new "Verify DMG contents" step did its job and red-flagged a missed wiring in the workflow itself.
