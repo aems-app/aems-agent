@@ -36,111 +36,146 @@ def test_release_workflow_builds_python_dist_before_downloading_binary_artifacts
     )
 
 
-def test_workflow_ad_hoc_signs_when_developer_id_absent() -> None:
-    """The macOS job must produce a code-signed .app even without Apple Developer ID.
+def test_workflow_relies_on_pyinstaller_signing_when_developer_id_absent() -> None:
+    """Without an Apple Developer ID the workflow must verify PyInstaller's signature, not re-sign.
 
-    macOS Big Sur+ refuses to launch fully unsigned binaries
-    ("damaged"), which is the exact symptom the Apple tester
-    reported. The fallback is an ad-hoc ``codesign --sign -`` that
-    flips Gatekeeper from "damaged" to the right-click-Open prompt.
-    Regression-guard that the workflow keeps both the Developer ID
-    path AND the ad-hoc fallback, and that the DMG is built AFTER
-    the .app has been signed (otherwise the .app inside the DMG is
-    unsigned even when secrets are present).
+    Apple's TN2206 warns against modifying a signed target after the
+    fact. PyInstaller >=6.20's BUNDLE directive already ad-hoc signs
+    every collected binary AND the .app wrapper on macOS. CI's job is
+    therefore just to verify the existing signature, not redo it.
+
+    The earlier v0.4.11/v0.4.12 attempts to redo signing in CI all
+    failed with "bundle format unrecognized, invalid, or unsuitable"
+    because the manual flat-bundle layout pre-BUNDLE put PyInstaller
+    onedir content under Contents/MacOS where codesign treats it as
+    nested-code territory. Regression-guard that we never go back.
     """
     workflow_path = Path(__file__).resolve().parents[1] / ".github" / "workflows" / "build.yml"
     workflow = workflow_path.read_text(encoding="utf-8")
 
-    assert "Ad-hoc sign macOS app bundle (no Developer ID)" in workflow
-    # Ad-hoc path signs the bundle wrapper without --deep because
-    # PyInstaller dist-info dirs in _internal/ break codesign --deep.
-    assert 'codesign --force --sign - --timestamp=none "$APP"' in workflow
-    assert 'codesign --force --sign - --timestamp=none "$APP/Contents/MacOS/aems-agent"' in workflow
-    # The find loop must skip *.framework/ paths — codesign cannot
-    # re-sign PyInstaller's pre-signed Python.framework ("bundle format
-    # is ambiguous"), so they must be left alone. If a future edit
-    # re-introduces framework signing, the macOS job fails the same
-    # way v0.4.12 did.
-    assert "! -path '*/*.framework/*'" in workflow
-    # .dist-info / .egg-info dirs must be stripped before bundle sign
-    # — codesign treats them as malformed nested bundles ("bundle
-    # format unrecognized, invalid, or unsuitable"). Without this
-    # the wrapper sign step on $APP fails. Agent's
-    # `_resolve_agent_version` already falls back to _version.txt
-    # when dist-info is absent (PyInstaller bundles regularly are).
-    assert "Stripping pip metadata directories" in workflow
-    assert "-name '*.dist-info'" in workflow
-    assert "-name '*.egg-info'" in workflow
+    assert "Verify PyInstaller ad-hoc signing (no Developer ID)" in workflow
+    assert 'codesign --verify --deep --strict --verbose=2 "$APP"' in workflow
+    # Must NOT re-sign in the ad-hoc path — see TN2206 + the
+    # v0.4.11..v0.4.12 CI history above.
+    ad_hoc_block = workflow.split("Verify PyInstaller ad-hoc signing (no Developer ID)")[1].split(
+        "- name:"
+    )[0]
+    assert "codesign --force --sign -" not in ad_hoc_block, (
+        "ad-hoc path must not invoke `codesign --force --sign -`; "
+        "PyInstaller already signed the bundle, re-signing reintroduces "
+        "the flat-bundle codesign failures from v0.4.11."
+    )
+
+    # Developer ID path must still re-sign with the real identity, and
+    # the DMG must be built AFTER the .app has been signed so the .app
+    # inside the DMG is signed too.
     assert "Sign macOS app bundle (Developer ID)" in workflow
     assert "Build DMG from signed .app" in workflow
-    assert "AEMS_AGENT_SKIP_DMG" in workflow
 
     sign_app_idx = workflow.index("Sign macOS app bundle (Developer ID)")
-    ad_hoc_idx = workflow.index("Ad-hoc sign macOS app bundle (no Developer ID)")
+    verify_idx = workflow.index("Verify PyInstaller ad-hoc signing (no Developer ID)")
     dmg_build_idx = workflow.index("Build DMG from signed .app")
     dmg_sign_idx = workflow.index("Sign and notarize macOS DMG (Developer ID)")
 
-    # Both signing paths must run before the DMG is built, and the DMG
-    # codesign+notarize must run after the DMG has been built.
     assert sign_app_idx < dmg_build_idx
-    assert ad_hoc_idx < dmg_build_idx
+    assert verify_idx < dmg_build_idx
     assert dmg_build_idx < dmg_sign_idx
 
 
-def test_macos_app_bundle_has_icon_and_high_dpi_keys(
+def test_macos_spec_uses_bundle_directive_with_brand_metadata() -> None:
+    """The macOS spec must emit a proper .app via BUNDLE(..., info_plist=...).
+
+    Pre-0.4.x ad-hoc CI signing failures stemmed from manually
+    assembling a flat .app under Contents/MacOS/_internal/, which
+    codesign refuses to walk reliably. PyInstaller's BUNDLE directive
+    relocates libraries to Contents/Frameworks/ and data to
+    Contents/Resources/ (the layout codesign actually wants) AND it
+    ad-hoc signs the result automatically. If a future edit drops
+    BUNDLE we are back to v0.4.11 territory.
+    """
+    spec_path = Path(__file__).resolve().parents[1] / "packaging" / "aems-agent.spec"
+    spec_text = spec_path.read_text(encoding="utf-8")
+
+    assert "BUNDLE(" in spec_text, "spec must call BUNDLE on macOS"
+    assert "sys.platform == 'darwin'" in spec_text
+    assert "bundle_identifier='com.aems.agent'" in spec_text
+    assert "'CFBundleIconFile': 'aems-agent.icns'" in spec_text
+    assert "'NSHighResolutionCapable': True" in spec_text
+    assert "'LSUIElement': True" in spec_text
+    assert "ensure_macos_icns" in spec_text, (
+        "the spec must render the multi-res .icns at build time so "
+        "BUNDLE(icon=...) ships a real branded icon (not Finder's "
+        "default blank-document glyph the Apple tester reported)."
+    )
+
+
+def test_pyinstaller_pin_is_at_least_6_20() -> None:
+    """PyInstaller's macOS bundle relocation needs >=6.11; pin >=6.20 for safety.
+
+    The Contents/Frameworks/ vs Contents/MacOS/ split that makes
+    codesign happy is in PyInstaller's 6.11+ macOS-bundle redesign.
+    A regression that loosens the pin below 6.20 would re-introduce
+    the flat-bundle failure mode v0.4.11 shipped with.
+    """
+    pyproject_path = Path(__file__).resolve().parents[1] / "pyproject.toml"
+    pyproject = tomllib.loads(pyproject_path.read_text(encoding="utf-8"))
+
+    build_extras = pyproject["project"]["optional-dependencies"]["build"]
+    pin = next((s for s in build_extras if s.startswith("pyinstaller")), None)
+    assert pin is not None, "build extras must include a pyinstaller pin"
+    assert ">=6.20" in pin, f"pyinstaller pin must be >=6.20, got: {pin!r}"
+
+
+def test_build_macos_dmg_locates_pyinstaller_bundle(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """macOS .app must ship a real icon, an Info.plist that references it, and retina opt-in.
+    """build.build_macos_dmg must consume the BUNDLE-produced .app, not re-assemble.
 
-    Pre-0.4.x bundles shipped without any Resources/aems-agent.icns or
-    CFBundleIconFile, which is why the Apple tester saw a blank
-    document icon in Finder. Regression-guard the three keys that
-    together produce a branded app icon.
+    Manually re-assembling a .app from the onedir output was the
+    architectural root cause of the v0.4.11/v0.4.12 codesign failures.
+    Regression-guard that the helper only locates an existing .app
+    and never copies onedir files into Contents/MacOS again.
     """
     sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "packaging"))
     build = importlib.import_module("build")
 
-    # Synthesize a fake PyInstaller onedir output: an executable file
-    # plus a sibling _internal dir of bundled binaries.
-    fake_dist = tmp_path / "pyinstaller-out"
-    fake_dist.mkdir()
-    (fake_dist / "aems-agent").write_bytes(b"#!/bin/sh\nexit 0\n")
-    (fake_dist / "_internal").mkdir()
-    (fake_dist / "_internal" / "lib.dylib").write_bytes(b"\x00")
-
-    # Redirect DIST_DIR so we don't touch the real one in the repo.
     monkeypatch.setattr(build, "DIST_DIR", tmp_path / "dist")
 
-    app_dir = build._write_macos_app_bundle(fake_dist)
+    # Without a pre-built .app the helper must raise; this catches a
+    # workflow that forgets the AEMS_AGENT_SKIP_DMG ordering.
+    with pytest.raises(FileNotFoundError):
+        build._locate_pyinstaller_macos_bundle()
 
-    assert app_dir.exists() and app_dir.is_dir()
-    icns = app_dir / "Contents" / "Resources" / "aems-agent.icns"
-    assert icns.exists(), "Resources/aems-agent.icns missing"
-    assert icns.read_bytes()[:4] == b"icns", "icns file lacks Apple IconFamily magic"
+    # With a pre-built .app the helper just returns its path.
+    (tmp_path / "dist" / "AEMS Agent.app" / "Contents" / "MacOS").mkdir(parents=True)
+    found = build._locate_pyinstaller_macos_bundle()
+    assert found == tmp_path / "dist" / "AEMS Agent.app"
 
-    plist = (app_dir / "Contents" / "Info.plist").read_text()
-    assert "<key>CFBundleIconFile</key><string>aems-agent</string>" in plist
-    assert "<key>NSHighResolutionCapable</key><true/>" in plist
-    assert "<key>CFBundleExecutable</key><string>aems-agent</string>" in plist
+    # `_write_macos_app_bundle` must NOT exist any more — we deleted
+    # the manual-assembly path. If a future maintainer restores it,
+    # this test fires before they can ship another broken signature.
+    assert not hasattr(build, "_write_macos_app_bundle"), (
+        "the manual flat-bundle assembly path was removed in favor of "
+        "PyInstaller's BUNDLE directive; re-introducing it brings back "
+        "the v0.4.11 codesign failures."
+    )
 
 
 def test_build_macos_dmg_honors_skip_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """AEMS_AGENT_SKIP_DMG=1 lets CI interpose a codesign step before DMG creation."""
+    """AEMS_AGENT_SKIP_DMG=1 still lets CI defer DMG creation."""
     sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "packaging"))
     build = importlib.import_module("build")
 
-    fake_dist = tmp_path / "pyinstaller-out"
-    fake_dist.mkdir()
-    (fake_dist / "aems-agent").write_bytes(b"#!/bin/sh\nexit 0\n")
+    # Pre-create the .app PyInstaller would have produced via BUNDLE.
+    (tmp_path / "dist" / "AEMS Agent.app" / "Contents" / "MacOS").mkdir(parents=True)
 
     monkeypatch.setattr(build, "DIST_DIR", tmp_path / "dist")
     monkeypatch.setenv("AEMS_AGENT_SKIP_DMG", "1")
-    # Even if hdiutil is somehow present on the runner, the env flag wins.
     monkeypatch.setattr(build.shutil, "which", lambda _name: "/usr/bin/hdiutil")
     calls: list[list[str]] = []
     monkeypatch.setattr(build, "run", lambda cmd, cwd=None: calls.append(list(cmd)))
 
-    build.build_macos_dmg(fake_dist)
+    build.build_macos_dmg(tmp_path / "pyinstaller-out")  # dist_path unused on macOS now
 
     assert all("hdiutil" not in c[0] for c in calls), "hdiutil should not have been invoked"
     assert not (tmp_path / "dist" / "AEMS-Agent.dmg").exists()

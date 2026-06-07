@@ -122,87 +122,53 @@ def build_windows_installer(dist_path: Path) -> Path:
     return installer
 
 
-def _write_macos_app_bundle(dist_path: Path) -> Path:
-    """Assemble the macOS .app bundle from the PyInstaller onedir output.
+def _locate_pyinstaller_macos_bundle() -> Path:
+    """Return the path to the .app PyInstaller produced via BUNDLE.
 
-    Returns the path of the `.app` directory. Pulled out of
-    ``build_macos_dmg`` so the CI workflow can build the bundle,
-    codesign it (ad-hoc or with a Developer ID), and only then wrap
-    it in a DMG — signing nested binaries inside an already-created
-    DMG does not propagate to the .app for notarization.
+    The PyInstaller spec's ``BUNDLE(coll, name="AEMS Agent.app", ...)``
+    step emits a proper Apple-conformant .app bundle: the launcher in
+    ``Contents/MacOS/``, shared libraries and frameworks relocated to
+    ``Contents/Frameworks/``, data in ``Contents/Resources/``. This is
+    the layout ``codesign`` expects, and PyInstaller already ad-hoc
+    signs the collected binaries plus the .app wrapper for us.
+
+    Earlier releases manually assembled a flat .app from the onedir
+    output (everything under ``Contents/MacOS/_internal/``); that layout
+    refused to codesign cleanly because pip metadata directories
+    (``*.dist-info``), the Python stdlib tree, and PyInstaller's
+    embedded ``Python.framework`` all sit in a location codesign
+    interprets as nested-code territory. We now let PyInstaller own
+    the bundle so the codesigning rules Apple documents (TN2206) line
+    up with reality.
     """
     app_name = "AEMS Agent"
     app_dir = DIST_DIR / f"{app_name}.app"
-    contents_dir = app_dir / "Contents"
-    macos_dir = contents_dir / "MacOS"
-    resources_dir = contents_dir / "Resources"
-
-    for d in [macos_dir, resources_dir]:
-        d.mkdir(parents=True, exist_ok=True)
-
-    for item in dist_path.iterdir():
-        dest = macos_dir / item.name
-        if item.is_dir():
-            shutil.copytree(str(item), str(dest), dirs_exist_ok=True)
-        else:
-            shutil.copy2(str(item), str(dest))
-
-    # Render the multi-resolution .icns into Resources/. Apple's
-    # CFBundleIconFile expects the basename without the .icns suffix.
-    src_dir = PROJECT_ROOT / "src"
-    if str(src_dir) not in sys.path:
-        sys.path.insert(0, str(src_dir))
-    from aems_agent.icons import ensure_macos_icns
-
-    icon_basename = "aems-agent"
-    ensure_macos_icns(resources_dir / f"{icon_basename}.icns")
-
-    # tomllib is stdlib on 3.11+; the project's requires-python = ">=3.10",
-    # so the 3.10 matrix needs the tomli backport.
-    if sys.version_info >= (3, 11):
-        import tomllib
-    else:  # pragma: no cover - Python 3.10 backport path
-        import tomli as tomllib
-
-    pyproject_path = PROJECT_ROOT / "pyproject.toml"
-    with open(pyproject_path, "rb") as f:
-        pyproject_data = tomllib.load(f)
-    pkg_version = pyproject_data.get("project", {}).get("version", "0.0.0")
-
-    plist_content = f"""<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
-  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-    <key>CFBundleName</key><string>AEMS Agent</string>
-    <key>CFBundleDisplayName</key><string>AEMS Agent</string>
-    <key>CFBundleIdentifier</key><string>com.aems.agent</string>
-    <key>CFBundleVersion</key><string>{pkg_version}</string>
-    <key>CFBundleShortVersionString</key><string>{pkg_version}</string>
-    <key>CFBundleExecutable</key><string>aems-agent</string>
-    <key>CFBundlePackageType</key><string>APPL</string>
-    <key>CFBundleIconFile</key><string>{icon_basename}</string>
-    <key>NSHighResolutionCapable</key><true/>
-    <key>LSMinimumSystemVersion</key><string>11.0</string>
-    <key>LSBackgroundOnly</key><true/>
-    <key>LSUIElement</key><true/>
-</dict>
-</plist>"""
-    (contents_dir / "Info.plist").write_text(plist_content)
-    print(f"  macOS .app bundle: {app_dir}")
+    if not app_dir.exists():
+        raise FileNotFoundError(
+            f"PyInstaller .app bundle not found at {app_dir}. The spec "
+            'must include a BUNDLE(coll, name="AEMS Agent.app", ...) '
+            "step on darwin — see packaging/aems-agent.spec."
+        )
     return app_dir
 
 
 def build_macos_dmg(dist_path: Path) -> Path:
-    """Build macOS DMG.
+    """Build the macOS DMG around the PyInstaller-produced .app bundle.
 
-    Skips DMG creation when ``AEMS_AGENT_SKIP_DMG=1`` is set — the CI
-    workflow uses that to interpose a codesign step on the .app before
-    the DMG is built.
+    Skips DMG creation when ``AEMS_AGENT_SKIP_DMG=1`` is set — kept for
+    backward compatibility with CI knobs, though the workflow no
+    longer needs to interpose a codesign step (PyInstaller has already
+    done it).
+
+    The ``dist_path`` argument is the onedir output and is unused on
+    macOS now; the function reads the BUNDLE-produced .app instead.
+    Kept in the signature so the cross-platform dispatcher in
+    ``main()`` remains uniform.
     """
+    _ = dist_path  # retained for signature compatibility; unused here
     app_name = "AEMS Agent"
     dmg_path = DIST_DIR / "AEMS-Agent.dmg"
-    app_dir = _write_macos_app_bundle(dist_path)
+    app_dir = _locate_pyinstaller_macos_bundle()
 
     if os.environ.get("AEMS_AGENT_SKIP_DMG") == "1":
         print("  AEMS_AGENT_SKIP_DMG=1 — skipping hdiutil DMG creation")

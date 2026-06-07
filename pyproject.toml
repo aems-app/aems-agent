@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "aems-agent"
-version = "0.4.12"
+version = "0.4.13"
 description = "AEMS Local Bridge Agent — local filesystem access for exam PDFs"
 authors = [{name = "AEMS Team", email = "contact@aems.app"}]
 readme = "README.md"
@@ -49,7 +49,7 @@ Changelog = "https://github.com/aems-app/aems-agent/blob/main/CHANGELOG.md"
 
 [project.optional-dependencies]
 tray = ["pystray>=0.19.0", "pillow>=10.0.0"]
-build = ["pyinstaller>=6.0.0,<7.0.0"]
+build = ["pyinstaller>=6.20.0,<7.0.0"]
 dev = [
     "pytest>=7.4.0",
     "pytest-asyncio>=0.23.0",

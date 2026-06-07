@@ -158,71 +158,32 @@ jobs:
           codesign --force --deep --options runtime --timestamp --sign "$MACOS_DEVELOPER_IDENTITY" "dist/AEMS Agent.app"
           codesign --verify --deep --strict --verbose=2 "dist/AEMS Agent.app"
 
-      - name: Ad-hoc sign macOS app bundle (no Developer ID)
+      - name: Verify PyInstaller ad-hoc signing (no Developer ID)
         if: steps.mac_sign_check.outputs.available == 'false'
         run: |
-          # Apple Silicon refuses to launch unsigned binaries at all
-          # (kCSRequireSignature). Without a paid Developer ID we still
-          # sign ad-hoc — that turns the boot-time "damaged" error into
-          # an "unidentified developer" Gatekeeper prompt the user can
-          # bypass once via right-click → Open. This is the path most
-          # open-source macOS apps (Calibre, Audacity, OBS pre-2020)
-          # ship on. The user-facing instructions live in
-          # packaging/macos/README.md and on the AEMS settings page.
+          # Without a paid Apple Developer ID we rely on PyInstaller's
+          # built-in ad-hoc signing pass (it signs every collected
+          # binary and the BUNDLE-emitted .app wrapper by default on
+          # macOS). That turns the boot-time "AEMS Agent is damaged"
+          # error into the "from an unidentified developer" Gatekeeper
+          # prompt that users bypass once via right-click → Open. This
+          # is the shipping model for most open-source Mac apps that
+          # don't pay for the Developer Program (Calibre, OBS Studio,
+          # MacDown, …).
           #
-          # We sign per-binary rather than with `codesign --deep`
-          # because PyInstaller's _internal/ subtree contains pip
-          # dist-info / egg-info directories that codesign mistakes
-          # for malformed nested bundles ("bundle format unrecognized,
-          # invalid, or unsuitable"). Walking Mach-O files directly
-          # and signing the wrapper last sidesteps that.
+          # We deliberately do NOT re-sign the bundle here. Apple's
+          # TN2206 warns against modifying a signed target after the
+          # fact, and the earlier v0.4.11–v0.4.12 attempts to redo
+          # the signing in CI repeatedly tripped codesign's flat-bundle
+          # detection on PyInstaller's onedir tree. The migration to
+          # the `BUNDLE` directive in packaging/aems-agent.spec (paired
+          # with pyinstaller>=6.20) puts the executable in
+          # Contents/MacOS/, libraries in Contents/Frameworks/, and
+          # data in Contents/Resources/ — the layout codesign actually
+          # wants.
           set -euo pipefail
           APP="dist/AEMS Agent.app"
-          # PyInstaller already ad-hoc signs the embedded
-          # Python.framework and most .so/.dylib files during build. Our
-          # job is just to (a) re-sign the loose Mach-O files we still
-          # own (those without an existing signature, or those we
-          # generated post-build), (b) sign the main executable, and
-          # (c) sign the bundle wrapper.
-          #
-          # Re-signing PyInstaller's already-signed Python.framework
-          # fails with "bundle format is ambiguous (could be app or
-          # framework)" because the framework's structure (Contents/
-          # alongside Versions/) trips codesign's bundle-type detection
-          # — there is no reliable way to coerce codesign to accept it
-          # as a framework once it sees both layouts. We side-step the
-          # whole class of problem by leaving frameworks alone: they
-          # already carry a valid ad-hoc signature from PyInstaller.
-          #
-          # We also have to strip pip's `.dist-info` / `.egg-info`
-          # metadata dirs out of the bundle BEFORE signing the wrapper.
-          # When codesign processes the .app it walks resources and
-          # interprets those dirs as malformed nested bundles
-          # ("bundle format unrecognized, invalid, or unsuitable. In
-          # subcomponent: .../websockets-16.0.dist-info"). The agent
-          # explicitly handles missing dist-info — `_resolve_agent_version`
-          # in src/aems_agent/config.py falls back to the bundled
-          # `_version.txt` written by build.py — so removing this
-          # metadata is safe at runtime.
-          echo "Stripping pip metadata directories from bundle..."
-          find "$APP" -type d \( -name '*.dist-info' -o -name '*.egg-info' \) \
-              -print -prune -exec rm -rf {} +
-          # Sign every remaining Mach-O file that is NOT inside a
-          # .framework.
-          while IFS= read -r -d '' f; do
-              if file -b "$f" 2>/dev/null | grep -qE 'Mach-O'; then
-                  # `|| true` so a single stubborn file doesn't abort
-                  # the whole pass; the final --verify will catch any
-                  # gap that matters.
-                  codesign --force --sign - --timestamp=none "$f" || true
-              fi
-          done < <(find "$APP/Contents/MacOS" -type f \
-                   ! -path '*/*.framework/*' \
-                   -print0)
-          # Sign the main executable + the bundle wrapper.
-          codesign --force --sign - --timestamp=none "$APP/Contents/MacOS/aems-agent"
-          codesign --force --sign - --timestamp=none "$APP"
-          codesign --verify --verbose=2 "$APP"
+          codesign --verify --deep --strict --verbose=2 "$APP"
 
       - name: Build DMG from signed .app
         run: |

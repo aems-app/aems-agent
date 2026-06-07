@@ -2,6 +2,21 @@
 
 All notable changes to `aems-agent` are recorded here. Format follows [Keep a Changelog](https://keepachangelog.com/) and the project uses [SemVer](https://semver.org/).
 
+## 0.4.13 — 2026-06-07
+
+The v0.4.11 + v0.4.12 ad-hoc codesign passes kept failing in CI with variants of `bundle format unrecognized, invalid, or unsuitable` because pre-0.4.13 the macOS bundle was hand-assembled into a flat layout (PyInstaller's onedir tree dropped under `Contents/MacOS/_internal/`). Apple's `codesign` interprets anything under `Contents/MacOS/` as nested-code territory and refuses to walk pip metadata dirs, the Python stdlib tree, or PyInstaller's embedded Python.framework that all sit there. No `codesign` flag combination rescues this layout — the fix is to stop using it.
+
+### Fixed
+
+- **macOS .app is now produced by PyInstaller's `BUNDLE` directive instead of being hand-assembled.** `packaging/aems-agent.spec` declares a `BUNDLE(coll, name="AEMS Agent.app", icon=..., bundle_identifier="com.aems.agent", info_plist={...})` step on darwin. PyInstaller 6.11+ relocates shared libraries to `Contents/Frameworks/` and data to `Contents/Resources/`, leaving only the launcher in `Contents/MacOS/` — the layout `codesign` actually wants. PyInstaller also ad-hoc signs every collected binary AND the .app wrapper by default, so the CI workflow no longer re-signs anything in the no-Developer-ID path; it just runs `codesign --verify --deep --strict` on the bundle.
+- **`packaging/build.py` no longer assembles the macOS .app.** `_write_macos_app_bundle()` has been removed; `build_macos_dmg` calls `_locate_pyinstaller_macos_bundle()` which just resolves the BUNDLE-produced `dist/AEMS Agent.app`. Hand-mutating a signed bundle is what Apple TN2206 explicitly warns against.
+- **PyInstaller pin tightened to `>=6.20.0,<7.0.0`.** The BUNDLE relocation logic that makes this signing pass cleanly is in 6.11; 6.20 is the conservative floor with the recent framework-handling fixes.
+
+### Internal
+
+- Test coverage now asserts: the spec uses BUNDLE with the brand metadata + icon, the pyinstaller pin floor is ≥6.20, the workflow's ad-hoc path verifies (never re-signs), and `_write_macos_app_bundle` cannot return — a future maintainer restoring the manual assembly path fails the suite before shipping.
+- The workflow's ad-hoc step shrank from ~50 lines of find loops, framework-skip filters, and dist-info strip to a single `codesign --verify` call.
+
 ## 0.4.12 — 2026-06-07
 
 Follow-up patch: the v0.4.11 release surfaced three CI failures that blocked the macOS .dmg artifact from publishing. All three are now fixed and the macOS, Windows, and Linux jobs publish a full release set.

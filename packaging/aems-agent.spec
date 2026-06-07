@@ -142,3 +142,52 @@ coll = COLLECT(
     upx_exclude=[],
     name='aems-agent',
 )
+
+# macOS: also produce a proper .app bundle alongside the onedir
+# distribution. PyInstaller's BUNDLE directive puts the executable in
+# Contents/MacOS/aems-agent and the bundled libraries in
+# Contents/Frameworks/, which matches Apple's bundle conventions and
+# lets `codesign --deep` walk the tree without choking on PyInstaller's
+# pip metadata directories. Without BUNDLE we have to manually assemble
+# the .app into Contents/MacOS/_internal/ (Apple's "flat bundle"
+# layout), which codesign refuses to sign reliably — the v0.4.11/0.4.12
+# CI failures were all variants of "bundle format unrecognized,
+# invalid, or unsuitable" stemming from that layout.
+if sys.platform == 'darwin':
+    # Resolve the icns we generate from the brand glyph so PyInstaller
+    # can ship a real multi-resolution icon. The CI workflow / build.py
+    # path also generates this; we render here to make the spec usable
+    # standalone too.
+    from aems_agent.icons import ensure_macos_icns
+
+    _MACOS_ICNS_PATH = PROJECT_ROOT / 'packaging' / 'aems-agent.icns'
+    ensure_macos_icns(_MACOS_ICNS_PATH)
+
+    _PYPROJECT = PROJECT_ROOT / 'pyproject.toml'
+    if sys.version_info >= (3, 11):
+        import tomllib as _tomllib  # type: ignore[no-redef]
+    else:
+        import tomli as _tomllib  # type: ignore[no-redef]
+    with open(_PYPROJECT, 'rb') as _f:
+        _pkg_version = _tomllib.load(_f)['project']['version']
+
+    app = BUNDLE(
+        coll,
+        name='AEMS Agent.app',
+        icon=str(_MACOS_ICNS_PATH),
+        bundle_identifier='com.aems.agent',
+        version=_pkg_version,
+        info_plist={
+            'CFBundleName': 'AEMS Agent',
+            'CFBundleDisplayName': 'AEMS Agent',
+            'CFBundleVersion': _pkg_version,
+            'CFBundleShortVersionString': _pkg_version,
+            'CFBundleExecutable': 'aems-agent',
+            'CFBundlePackageType': 'APPL',
+            'CFBundleIconFile': 'aems-agent.icns',
+            'LSMinimumSystemVersion': '11.0',
+            'LSBackgroundOnly': True,
+            'LSUIElement': True,
+            'NSHighResolutionCapable': True,
+        },
+    )
