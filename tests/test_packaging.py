@@ -56,14 +56,21 @@ def test_workflow_ad_hoc_signs_when_developer_id_absent() -> None:
     # PyInstaller dist-info dirs in _internal/ break codesign --deep.
     assert 'codesign --force --sign - --timestamp=none "$APP"' in workflow
     assert 'codesign --force --sign - --timestamp=none "$APP/Contents/MacOS/aems-agent"' in workflow
-    # The find loop must skip *.framework/, *.dist-info/, *.egg-info/
-    # paths — codesign cannot re-sign PyInstaller's pre-signed
-    # Python.framework ("bundle format is ambiguous"), and pip metadata
-    # dirs have no executables anyway. If a future edit re-introduces
-    # framework signing, the macOS job will fail again the same way
-    # v0.4.12 did.
+    # The find loop must skip *.framework/ paths — codesign cannot
+    # re-sign PyInstaller's pre-signed Python.framework ("bundle format
+    # is ambiguous"), so they must be left alone. If a future edit
+    # re-introduces framework signing, the macOS job fails the same
+    # way v0.4.12 did.
     assert "! -path '*/*.framework/*'" in workflow
-    assert "! -path '*/*.dist-info/*'" in workflow
+    # .dist-info / .egg-info dirs must be stripped before bundle sign
+    # — codesign treats them as malformed nested bundles ("bundle
+    # format unrecognized, invalid, or unsuitable"). Without this
+    # the wrapper sign step on $APP fails. Agent's
+    # `_resolve_agent_version` already falls back to _version.txt
+    # when dist-info is absent (PyInstaller bundles regularly are).
+    assert "Stripping pip metadata directories" in workflow
+    assert "-name '*.dist-info'" in workflow
+    assert "-name '*.egg-info'" in workflow
     assert "Sign macOS app bundle (Developer ID)" in workflow
     assert "Build DMG from signed .app" in workflow
     assert "AEMS_AGENT_SKIP_DMG" in workflow

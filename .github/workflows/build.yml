@@ -194,9 +194,21 @@ jobs:
           # whole class of problem by leaving frameworks alone: they
           # already carry a valid ad-hoc signature from PyInstaller.
           #
+          # We also have to strip pip's `.dist-info` / `.egg-info`
+          # metadata dirs out of the bundle BEFORE signing the wrapper.
+          # When codesign processes the .app it walks resources and
+          # interprets those dirs as malformed nested bundles
+          # ("bundle format unrecognized, invalid, or unsuitable. In
+          # subcomponent: .../websockets-16.0.dist-info"). The agent
+          # explicitly handles missing dist-info — `_resolve_agent_version`
+          # in src/aems_agent/config.py falls back to the bundled
+          # `_version.txt` written by build.py — so removing this
+          # metadata is safe at runtime.
+          echo "Stripping pip metadata directories from bundle..."
+          find "$APP" -type d \( -name '*.dist-info' -o -name '*.egg-info' \) \
+              -print -prune -exec rm -rf {} +
           # Sign every remaining Mach-O file that is NOT inside a
-          # .framework (skip .dist-info and .egg-info too — they are
-          # pip metadata and have no executables anyway).
+          # .framework.
           while IFS= read -r -d '' f; do
               if file -b "$f" 2>/dev/null | grep -qE 'Mach-O'; then
                   # `|| true` so a single stubborn file doesn't abort
@@ -206,8 +218,6 @@ jobs:
               fi
           done < <(find "$APP/Contents/MacOS" -type f \
                    ! -path '*/*.framework/*' \
-                   ! -path '*/*.dist-info/*' \
-                   ! -path '*/*.egg-info/*' \
                    -print0)
           # Sign the main executable + the bundle wrapper.
           codesign --force --sign - --timestamp=none "$APP/Contents/MacOS/aems-agent"
