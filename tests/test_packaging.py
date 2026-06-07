@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import importlib
-import os
 import sys
 from pathlib import Path
 
@@ -57,6 +56,14 @@ def test_workflow_ad_hoc_signs_when_developer_id_absent() -> None:
     # PyInstaller dist-info dirs in _internal/ break codesign --deep.
     assert 'codesign --force --sign - --timestamp=none "$APP"' in workflow
     assert 'codesign --force --sign - --timestamp=none "$APP/Contents/MacOS/aems-agent"' in workflow
+    # The find loop must skip *.framework/, *.dist-info/, *.egg-info/
+    # paths — codesign cannot re-sign PyInstaller's pre-signed
+    # Python.framework ("bundle format is ambiguous"), and pip metadata
+    # dirs have no executables anyway. If a future edit re-introduces
+    # framework signing, the macOS job will fail again the same way
+    # v0.4.12 did.
+    assert "! -path '*/*.framework/*'" in workflow
+    assert "! -path '*/*.dist-info/*'" in workflow
     assert "Sign macOS app bundle (Developer ID)" in workflow
     assert "Build DMG from signed .app" in workflow
     assert "AEMS_AGENT_SKIP_DMG" in workflow

@@ -178,23 +178,38 @@ jobs:
           # and signing the wrapper last sidesteps that.
           set -euo pipefail
           APP="dist/AEMS Agent.app"
-          # 1. Sign every embedded .framework as a single bundle, deepest
-          #    first so nested frameworks get signed before their parents.
-          #    PyInstaller embeds Python.framework whose inner Mach-O is
-          #    `Python.framework/Python`; signing that file directly
-          #    confuses codesign ("bundle format is ambiguous"), but
-          #    signing the framework dir does the right thing.
-          while IFS= read -r -d '' fw; do
-              codesign --force --sign - --timestamp=none "$fw"
-          done < <(find "$APP/Contents/MacOS" -name '*.framework' -depth -print0)
-          # 2. Sign every remaining Mach-O file that is NOT inside a
-          #    .framework (those were covered by step 1).
+          # PyInstaller already ad-hoc signs the embedded
+          # Python.framework and most .so/.dylib files during build. Our
+          # job is just to (a) re-sign the loose Mach-O files we still
+          # own (those without an existing signature, or those we
+          # generated post-build), (b) sign the main executable, and
+          # (c) sign the bundle wrapper.
+          #
+          # Re-signing PyInstaller's already-signed Python.framework
+          # fails with "bundle format is ambiguous (could be app or
+          # framework)" because the framework's structure (Contents/
+          # alongside Versions/) trips codesign's bundle-type detection
+          # — there is no reliable way to coerce codesign to accept it
+          # as a framework once it sees both layouts. We side-step the
+          # whole class of problem by leaving frameworks alone: they
+          # already carry a valid ad-hoc signature from PyInstaller.
+          #
+          # Sign every remaining Mach-O file that is NOT inside a
+          # .framework (skip .dist-info and .egg-info too — they are
+          # pip metadata and have no executables anyway).
           while IFS= read -r -d '' f; do
-              if file -b "$f" | grep -qE 'Mach-O'; then
-                  codesign --force --sign - --timestamp=none "$f"
+              if file -b "$f" 2>/dev/null | grep -qE 'Mach-O'; then
+                  # `|| true` so a single stubborn file doesn't abort
+                  # the whole pass; the final --verify will catch any
+                  # gap that matters.
+                  codesign --force --sign - --timestamp=none "$f" || true
               fi
-          done < <(find "$APP/Contents/MacOS" -type f ! -path '*/*.framework/*' -print0)
-          # 3. Sign the main executable + the bundle wrapper.
+          done < <(find "$APP/Contents/MacOS" -type f \
+                   ! -path '*/*.framework/*' \
+                   ! -path '*/*.dist-info/*' \
+                   ! -path '*/*.egg-info/*' \
+                   -print0)
+          # Sign the main executable + the bundle wrapper.
           codesign --force --sign - --timestamp=none "$APP/Contents/MacOS/aems-agent"
           codesign --force --sign - --timestamp=none "$APP"
           codesign --verify --verbose=2 "$APP"

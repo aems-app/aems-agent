@@ -203,7 +203,6 @@ def build_macos_dmg(dist_path: Path) -> Path:
     app_name = "AEMS Agent"
     dmg_path = DIST_DIR / "AEMS-Agent.dmg"
     app_dir = _write_macos_app_bundle(dist_path)
-    contents_dir = app_dir / "Contents"
 
     if os.environ.get("AEMS_AGENT_SKIP_DMG") == "1":
         print("  AEMS_AGENT_SKIP_DMG=1 — skipping hdiutil DMG creation")
