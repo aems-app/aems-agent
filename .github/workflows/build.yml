@@ -200,11 +200,18 @@ jobs:
 
       - name: Build DMG from signed .app
         run: |
-          rm -f "dist/AEMS-Agent.dmg"
-          hdiutil create \
-            -volname "AEMS Agent" \
-            -srcfolder "dist/AEMS Agent.app" \
-            -ov "dist/AEMS-Agent.dmg"
+          # Reuse packaging/build.py's staging helper so CI and local
+          # macOS builds produce the same DMG root: the signed .app,
+          # com.aems.agent.plist, and the /Applications symlink.
+          python - <<'PY'
+          import sys
+          from pathlib import Path
+
+          sys.path.insert(0, str(Path("packaging").resolve()))
+          import build
+
+          build.build_macos_dmg(Path("dist/aems-agent"))
+          PY
 
       - name: Verify DMG contents (.app + plist + Applications symlink)
         # Codex review pointed out that build.py used to drop

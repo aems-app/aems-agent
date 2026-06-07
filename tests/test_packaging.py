@@ -89,6 +89,39 @@ def test_workflow_relies_on_pyinstaller_signing_when_developer_id_absent() -> No
     assert verify_idx < dmg_build_idx
     assert dmg_build_idx < dmg_sign_idx
 
+    dmg_build_block = workflow.split("Build DMG from signed .app")[1].split("- name:")[0]
+    assert '-srcfolder "dist/AEMS Agent.app"' not in dmg_build_block, (
+        "the workflow must not build the DMG directly from the .app bundle; "
+        "that drops com.aems.agent.plist and the /Applications symlink from "
+        "the mounted DMG root."
+    )
+    assert "build.build_macos_dmg" in dmg_build_block, (
+        "CI should reuse packaging/build.py's DMG staging helper so the "
+        "release workflow and local macOS builds emit the same DMG layout."
+    )
+
+
+def test_workflow_smoke_tests_frozen_macos_app_before_signing() -> None:
+    """The macOS release job should execute the frozen app before signing/DMG steps.
+
+    This catches missing hidden imports, broken ``ctypes`` loads, and
+    relocated ``Contents/Frameworks`` issues while we still have the
+    unpacked `.app` in the workspace.
+    """
+    workflow_path = Path(__file__).resolve().parents[1] / ".github" / "workflows" / "build.yml"
+    workflow = workflow_path.read_text(encoding="utf-8")
+
+    assert "Smoke-test frozen .app (--version)" in workflow
+    assert '"dist/AEMS Agent.app/Contents/MacOS/aems-agent" --version' in workflow
+
+    build_idx = workflow.index("Build .app bundle with PyInstaller (DMG deferred)")
+    smoke_idx = workflow.index("Smoke-test frozen .app (--version)")
+    sign_idx = workflow.index("Sign macOS app bundle (Developer ID)")
+    verify_idx = workflow.index("Verify PyInstaller ad-hoc signing (no Developer ID)")
+
+    assert build_idx < smoke_idx < sign_idx
+    assert build_idx < smoke_idx < verify_idx
+
 
 def test_macos_spec_uses_bundle_directive_with_brand_metadata() -> None:
     """The macOS spec must emit a proper .app via BUNDLE(..., info_plist=...).

@@ -2,17 +2,18 @@
 
 """Shared icon rendering for the AEMS Local Bridge Agent.
 
-The tray / Windows icon is rendered as a rounded-rectangle badge in the
-current status colour (green = running with storage, yellow = running
-without storage, red = error / unreachable) with the AEMS brand glyph
-overlaid in white.
+Two icon treatments intentionally exist:
+
+- The live tray icon is a rounded-rectangle status badge in green,
+  yellow, or red with the AEMS glyph overlaid in white.
+- The packaged macOS / Windows app icon uses the same glyph on the
+  brand-navy product badge so Finder, Spotlight, Start, and the taskbar
+  read it as app identity rather than runtime state.
 
 The glyph mask is the AEMS website favicon rasterised at 512x512 and
 shipped as ``assets/aems-logo-mask.png``. We load only its alpha
-channel, resize to the requested target size, and use it to stamp
-white onto the coloured badge. This keeps the icon visually consistent
-with ``aems-website`` / ``aems-web`` while still letting the status
-colour communicate state at-a-glance in the tray.
+channel, resize to the requested target size, and composite it onto the
+relevant badge fill.
 """
 
 from __future__ import annotations

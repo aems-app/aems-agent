@@ -2,6 +2,23 @@
 
 All notable changes to `aems-agent` are recorded here. Format follows [Keep a Changelog](https://keepachangelog.com/) and the project uses [SemVer](https://semver.org/).
 
+## 0.4.15 — 2026-06-07
+
+Patch release after Codex caught that the v0.4.14 CI build failed before the release artifacts published: the new "Verify DMG contents" step did its job and red-flagged a missed wiring in the workflow itself.
+
+### Fixed
+
+- **The release workflow's "Build DMG from signed .app" step now reuses `packaging/build.py`'s staging helper** instead of calling `hdiutil create -srcfolder "dist/AEMS Agent.app"` directly. v0.4.14 fixed the DMG staging in `build.py` but the workflow still built the DMG straight from the `.app`, so `com.aems.agent.plist` and the `Applications` symlink never made it into the released DMG — the same gap v0.4.14 was supposed to close. The workflow now invokes `build.build_macos_dmg(Path("dist/aems-agent"))` via inline Python so CI and local macOS builds emit the same DMG root.
+- **`src/aems_agent/icons.py` module docstring** corrected — it still described the Windows icon as the green status badge even after `ensure_windows_icon` was switched to `render_app_icon` (brand navy) in v0.4.14.
+
+### Internal
+
+- Regression test `test_workflow_relies_on_pyinstaller_signing_when_developer_id_absent` now asserts the workflow's DMG-build block does **not** contain `-srcfolder "dist/AEMS Agent.app"` and **does** call `build.build_macos_dmg`, so the v0.4.14-style drift can't reopen silently.
+
+### Validation gap (still carried over from v0.4.13)
+
+- Developer ID path's `codesign --force --deep --options runtime --timestamp --sign ...` still uses `--deep` for signing instead of TN2206's inside-out approach. Untouched because validating the rewrite requires a real macOS host with a Developer ID identity available — same reason as v0.4.14.
+
 ## 0.4.14 — 2026-06-07
 
 Follow-up to v0.4.13 acting on a Codex review of the macOS packaging slice. The Apple tester on v0.4.13 confirmed the app launches past Gatekeeper via the documented Sequoia path, surfacing three smaller gaps worth closing before declaring the slice done.
