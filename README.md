@@ -22,8 +22,34 @@ Pre-built installers — no Python needed — are on the [Releases page](https:/
 | Platform | File | Notes |
 |----------|------|-------|
 | Windows | `aems-agent-setup.exe` | Installs to `%LOCALAPPDATA%\AEMS Agent` |
-| macOS   | `AEMS-Agent.dmg`       | Drag to Applications |
+| macOS   | `AEMS-Agent.dmg`       | Drag to Applications. **First launch: right-click the app → Open** (see below) |
 | Linux   | `aems-agent-linux-x86_64.tar.gz` | Extract, run `./install.sh`, then start `aems-agent run --tray` or enable the user service |
+
+#### macOS: first launch
+
+The macOS download is signed with a **free ad-hoc signature**, not an Apple
+Developer ID (we are not in the Apple Developer Program). That means macOS
+Gatekeeper will refuse to open the app on a normal double-click and may show
+"AEMS Agent is damaged" or "from an unidentified developer". You only need to
+do this **once**:
+
+1. Open the downloaded `AEMS-Agent.dmg` and drag **AEMS Agent** to Applications.
+2. In **Applications**, **right-click** (or Control-click) AEMS Agent → **Open**.
+3. Confirm the warning dialog by clicking **Open** again.
+
+After that first launch the app runs normally and macOS remembers your choice.
+
+If macOS still refuses, the download was likely quarantined by your browser.
+Run this once in Terminal:
+
+```bash
+xattr -dr com.apple.quarantine "/Applications/AEMS Agent.app"
+```
+
+If you've never seen this before: this is the same flow every free macOS app
+without a $99/yr Apple Developer ID uses — Calibre, OBS Studio, MacDown,
+HandBrake (historically), etc. It's not a virus warning; it's a "we couldn't
+verify the publisher's identity" warning.
 
 ### pip (for developers)
 

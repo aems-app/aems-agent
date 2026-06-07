@@ -122,12 +122,16 @@ def build_windows_installer(dist_path: Path) -> Path:
     return installer
 
 
-def build_macos_dmg(dist_path: Path) -> Path:
-    """Build macOS DMG."""
-    app_name = "AEMS Agent"
-    dmg_path = DIST_DIR / "AEMS-Agent.dmg"
+def _write_macos_app_bundle(dist_path: Path) -> Path:
+    """Assemble the macOS .app bundle from the PyInstaller onedir output.
 
-    # Create .app bundle structure
+    Returns the path of the `.app` directory. Pulled out of
+    ``build_macos_dmg`` so the CI workflow can build the bundle,
+    codesign it (ad-hoc or with a Developer ID), and only then wrap
+    it in a DMG — signing nested binaries inside an already-created
+    DMG does not propagate to the .app for notarization.
+    """
+    app_name = "AEMS Agent"
     app_dir = DIST_DIR / f"{app_name}.app"
     contents_dir = app_dir / "Contents"
     macos_dir = contents_dir / "MacOS"
@@ -136,7 +140,6 @@ def build_macos_dmg(dist_path: Path) -> Path:
     for d in [macos_dir, resources_dir]:
         d.mkdir(parents=True, exist_ok=True)
 
-    # Copy PyInstaller output into MacOS dir
     for item in dist_path.iterdir():
         dest = macos_dir / item.name
         if item.is_dir():
@@ -144,7 +147,16 @@ def build_macos_dmg(dist_path: Path) -> Path:
         else:
             shutil.copy2(str(item), str(dest))
 
-    # Read version from pyproject.toml
+    # Render the multi-resolution .icns into Resources/. Apple's
+    # CFBundleIconFile expects the basename without the .icns suffix.
+    src_dir = PROJECT_ROOT / "src"
+    if str(src_dir) not in sys.path:
+        sys.path.insert(0, str(src_dir))
+    from aems_agent.icons import ensure_macos_icns
+
+    icon_basename = "aems-agent"
+    ensure_macos_icns(resources_dir / f"{icon_basename}.icns")
+
     import tomllib
 
     pyproject_path = PROJECT_ROOT / "pyproject.toml"
@@ -152,7 +164,6 @@ def build_macos_dmg(dist_path: Path) -> Path:
         pyproject_data = tomllib.load(f)
     pkg_version = pyproject_data.get("project", {}).get("version", "0.0.0")
 
-    # Write Info.plist
     plist_content = f"""<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
   "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -165,14 +176,33 @@ def build_macos_dmg(dist_path: Path) -> Path:
     <key>CFBundleShortVersionString</key><string>{pkg_version}</string>
     <key>CFBundleExecutable</key><string>aems-agent</string>
     <key>CFBundlePackageType</key><string>APPL</string>
+    <key>CFBundleIconFile</key><string>{icon_basename}</string>
+    <key>NSHighResolutionCapable</key><true/>
+    <key>LSMinimumSystemVersion</key><string>11.0</string>
     <key>LSBackgroundOnly</key><true/>
     <key>LSUIElement</key><true/>
 </dict>
 </plist>"""
     (contents_dir / "Info.plist").write_text(plist_content)
+    print(f"  macOS .app bundle: {app_dir}")
+    return app_dir
 
-    # Create DMG
-    if shutil.which("hdiutil"):
+
+def build_macos_dmg(dist_path: Path) -> Path:
+    """Build macOS DMG.
+
+    Skips DMG creation when ``AEMS_AGENT_SKIP_DMG=1`` is set — the CI
+    workflow uses that to interpose a codesign step on the .app before
+    the DMG is built.
+    """
+    app_name = "AEMS Agent"
+    dmg_path = DIST_DIR / "AEMS-Agent.dmg"
+    app_dir = _write_macos_app_bundle(dist_path)
+    contents_dir = app_dir / "Contents"
+
+    if os.environ.get("AEMS_AGENT_SKIP_DMG") == "1":
+        print("  AEMS_AGENT_SKIP_DMG=1 — skipping hdiutil DMG creation")
+    elif shutil.which("hdiutil"):
         if dmg_path.exists():
             dmg_path.unlink()
         run(

@@ -107,7 +107,9 @@ jobs:
         run: |
           pip install -e ".[dev,build]"
 
-      - name: Build with PyInstaller
+      - name: Build .app bundle with PyInstaller (DMG deferred)
+        env:
+          AEMS_AGENT_SKIP_DMG: "1"
         run: python packaging/build.py --platform macos
 
       - name: Check macOS signing credentials
@@ -122,9 +124,9 @@ jobs:
           done
           echo "available=$ALL_PRESENT" >> "$GITHUB_OUTPUT"
           if [ "$ALL_PRESENT" = "false" ]; then
-            echo "::warning::macOS signing/notarization credentials not configured. DMG will be unsigned."
+            echo "::warning::macOS Developer ID secrets not configured. App will ship ad-hoc signed; macOS users must right-click → Open on first launch."
           else
-            echo "Signing credentials found, will sign and notarize."
+            echo "Developer ID secrets found, will sign and notarize."
           fi
 
       - name: Import Developer ID certificate
@@ -150,17 +152,39 @@ jobs:
           security import "$CERT_PATH" -k "$KEYCHAIN_PATH" -P "$MACOS_CERT_PASSWORD" -T /usr/bin/codesign -T /usr/bin/security
           security set-key-partition-list -S apple-tool:,apple: -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
 
-      - name: Sign macOS app bundle and DMG
+      - name: Sign macOS app bundle (Developer ID)
         if: steps.mac_sign_check.outputs.available == 'true'
         run: |
           codesign --force --deep --options runtime --timestamp --sign "$MACOS_DEVELOPER_IDENTITY" "dist/AEMS Agent.app"
           codesign --verify --deep --strict --verbose=2 "dist/AEMS Agent.app"
-          codesign --force --timestamp --sign "$MACOS_DEVELOPER_IDENTITY" "dist/AEMS-Agent.dmg"
-          codesign --verify --verbose=2 "dist/AEMS-Agent.dmg"
 
-      - name: Notarize and staple macOS DMG
+      - name: Ad-hoc sign macOS app bundle (no Developer ID)
+        if: steps.mac_sign_check.outputs.available == 'false'
+        run: |
+          # Apple Silicon refuses to launch unsigned binaries at all
+          # (kCSRequireSignature). Without a paid Developer ID we still
+          # sign ad-hoc — that turns the boot-time "damaged" error into
+          # an "unidentified developer" Gatekeeper prompt the user can
+          # bypass once via right-click → Open. This is the path most
+          # open-source macOS apps (Calibre, Audacity, OBS pre-2020)
+          # ship on. The user-facing instructions live in
+          # packaging/macos/README.md and on the AEMS settings page.
+          codesign --force --deep --sign - "dist/AEMS Agent.app"
+          codesign --verify --deep --strict --verbose=2 "dist/AEMS Agent.app"
+
+      - name: Build DMG from signed .app
+        run: |
+          rm -f "dist/AEMS-Agent.dmg"
+          hdiutil create \
+            -volname "AEMS Agent" \
+            -srcfolder "dist/AEMS Agent.app" \
+            -ov "dist/AEMS-Agent.dmg"
+
+      - name: Sign and notarize macOS DMG (Developer ID)
         if: steps.mac_sign_check.outputs.available == 'true'
         run: |
+          codesign --force --timestamp --sign "$MACOS_DEVELOPER_IDENTITY" "dist/AEMS-Agent.dmg"
+          codesign --verify --verbose=2 "dist/AEMS-Agent.dmg"
           xcrun notarytool submit "dist/AEMS-Agent.dmg" \
             --apple-id "$APPLE_ID" \
             --password "$APPLE_APP_SPECIFIC_PASSWORD" \

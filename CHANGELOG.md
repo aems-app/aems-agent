@@ -2,6 +2,26 @@
 
 All notable changes to `aems-agent` are recorded here. Format follows [Keep a Changelog](https://keepachangelog.com/) and the project uses [SemVer](https://semver.org/).
 
+## 0.4.11 — 2026-06-07
+
+Unblocks the macOS install path that the v0.4.10 download surfaced as completely broken to an Apple-using tester: the unsigned, icon-less `.app` was rejected by Gatekeeper as "AEMS Agent is damaged" and rendered as a blank document icon in Finder.
+
+### Fixed
+
+- **macOS `.app` now has a real, multi-resolution icon.** `Contents/Resources/aems-agent.icns` is generated from the AEMS brand glyph at every standard Apple IconFamily slot (16, 32, 64, 128, 256, 512, 1024 px — including the retina `@2x` variants `ic11`/`ic12`/`ic13`/`ic14`). `Info.plist` now declares `CFBundleIconFile` + `NSHighResolutionCapable`. Finder, the Dock, and Spotlight now render the badge correctly at every zoom level.
+- **macOS `.app` is now ad-hoc code-signed in CI when no Apple Developer ID is configured.** Big Sur+ refuses to launch fully unsigned binaries (`kCSRequireSignature`), which is the exact symptom the tester saw. The CI workflow now runs `codesign --force --deep --sign -` on the `.app` bundle before building the DMG, which flips Gatekeeper from the unrecoverable "damaged" error to the "from an unidentified developer" prompt that users can bypass once via right-click → Open. This is the shipping path most open-source macOS apps without a paid Developer Program enrollment use (Calibre, OBS Studio historically, HandBrake, MacDown, …).
+- **CI now signs the `.app` *before* wrapping it in the DMG.** Previously the workflow signed the .app *and* a pre-existing unsigned DMG; the .app *inside* the DMG was therefore unsigned, which would have failed notarization even on the Tier-2 (paid Developer ID) path. `packaging/build.py` now supports `AEMS_AGENT_SKIP_DMG=1` so the workflow can interpose signing between PyInstaller and DMG creation. Developer-ID and ad-hoc paths share the new ordering.
+
+### Internal
+
+- `aems_agent.icons.ensure_macos_icns(path)` — hand-rolled multi-size IconFamily writer (Pillow's ICNS writer is unreliable cross-platform and only emits a single slot). Test coverage asserts magic bytes, total-size header, and every Apple-standard slot from 16x16 to 1024x1024 is present and PNG-encoded.
+- `_write_macos_app_bundle()` extracted from `build_macos_dmg()` so CI and local Mac dev builds share one bundle-assembly path.
+- New regression tests guard (a) the IconFamily writer producing all 10 slots, (b) the `.app` bundle containing `Resources/aems-agent.icns` + the two `Info.plist` keys, (c) the `AEMS_AGENT_SKIP_DMG` env honored by the build script, and (d) the CI workflow keeping both Developer-ID and ad-hoc signing paths in the correct order around DMG creation.
+
+### Docs
+
+- `README.md` and `packaging/macos/README.md` now spell out the first-launch ritual (drag to Applications → right-click → Open) with the `xattr -dr com.apple.quarantine` fallback, and explain why this is the same flow free open-source macOS apps use.
+
 ## 0.4.10 — 2026-05-31
 
 Repo hygiene + two real CI regressions surfaced by the v0.4.9 review.

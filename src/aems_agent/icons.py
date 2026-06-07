@@ -106,3 +106,58 @@ def ensure_windows_icon(path: Path) -> Path:
     base = render_status_icon("green", size=largest)
     base.save(path, format="ICO", sizes=[(size, size) for size in WINDOWS_ICON_SIZES])
     return path
+
+
+# Apple IconFamily slot codes, paired with the pixel edge length each slot
+# expects. The set mirrors what Finder, the Dock, and Spotlight pick
+# from on retina + non-retina displays.
+_MACOS_ICNS_ENTRIES: tuple[tuple[bytes, int], ...] = (
+    (b"icp4", 16),    # 16x16
+    (b"icp5", 32),    # 32x32
+    (b"ic07", 128),   # 128x128
+    (b"ic08", 256),   # 256x256
+    (b"ic09", 512),   # 512x512
+    (b"ic10", 1024),  # 1024x1024 / 512@2x
+    (b"ic11", 32),    # 16@2x
+    (b"ic12", 64),    # 32@2x
+    (b"ic13", 256),   # 128@2x
+    (b"ic14", 512),   # 256@2x
+)
+
+
+def ensure_macos_icns(path: Path) -> Path:
+    """Generate the macOS ICNS asset with multiple embedded sizes.
+
+    Pillow's built-in ICNS writer only emits a single size and is
+    unreliable across platforms, so we assemble a real Apple IconFamily
+    container ourselves: PNG payload per slot, big-endian length
+    prefix, 'icns' magic + total-size header. Format reference:
+    https://en.wikipedia.org/wiki/Apple_Icon_Image_format
+
+    Apple's Finder uses these slots to render at different zoom levels;
+    shipping a single 1024px source produces visibly blurry icons in
+    column view and on the Dock at 16-32px.
+    """
+    import io
+    import struct
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+
+    body = bytearray()
+    for type_code, size in _MACOS_ICNS_ENTRIES:
+        img = render_status_icon("green", size=size)
+        buf = io.BytesIO()
+        img.save(buf, format="PNG")
+        payload = buf.getvalue()
+        entry_size = len(payload) + 8  # 4-byte type code + 4-byte length header
+        body += type_code
+        body += struct.pack(">I", entry_size)
+        body += payload
+
+    total_size = 8 + len(body)
+    with open(path, "wb") as f:
+        f.write(b"icns")
+        f.write(struct.pack(">I", total_size))
+        f.write(bytes(body))
+
+    return path
