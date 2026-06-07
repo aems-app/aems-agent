@@ -11,6 +11,13 @@ def test_readme_documents_current_linux_installer_flow() -> None:
     assert "Privacy & Storage" in readme
 
 
+def test_readme_summary_row_points_macos_users_to_versioned_first_launch_steps() -> None:
+    readme = (PROJECT_ROOT / "README.md").read_text(encoding="utf-8")
+
+    assert "First launch: right-click the app -> Open" not in readme
+    assert "First launch: see Sequoia + older-macOS steps below" in readme
+
+
 def test_release_workflow_uses_built_linux_tarball_and_python_distributions() -> None:
     workflow = (PROJECT_ROOT / ".github" / "workflows" / "build.yml").read_text(encoding="utf-8")
 

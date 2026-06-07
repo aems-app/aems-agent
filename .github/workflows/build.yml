@@ -112,6 +112,17 @@ jobs:
           AEMS_AGENT_SKIP_DMG: "1"
         run: python packaging/build.py --platform macos
 
+      - name: Smoke-test frozen .app (--version)
+        # If the frozen launcher can't even print its own version we'd
+        # rather find that out before tagging a release. The agent's
+        # CLI exits 0 after `--version` so this round-trips fast.
+        # LSUIElement=true does not affect direct CLI invocation, and
+        # PyInstaller's onedir launcher resolves its bundled libs from
+        # Contents/Frameworks/ correctly when run from inside the .app.
+        run: |
+          set -euo pipefail
+          "dist/AEMS Agent.app/Contents/MacOS/aems-agent" --version
+
       - name: Check macOS signing credentials
         id: mac_sign_check
         run: |
@@ -124,7 +135,7 @@ jobs:
           done
           echo "available=$ALL_PRESENT" >> "$GITHUB_OUTPUT"
           if [ "$ALL_PRESENT" = "false" ]; then
-            echo "::warning::macOS Developer ID secrets not configured. App will ship ad-hoc signed; macOS users must right-click → Open on first launch."
+              echo "::warning::macOS Developer ID secrets not configured. App will ship ad-hoc signed; on macOS 15 Sequoia users must first double-click it, then use System Settings -> Privacy & Security -> Open Anyway."
           else
             echo "Developer ID secrets found, will sign and notarize."
           fi
@@ -165,8 +176,10 @@ jobs:
           # built-in ad-hoc signing pass (it signs every collected
           # binary and the BUNDLE-emitted .app wrapper by default on
           # macOS). That turns the boot-time "AEMS Agent is damaged"
-          # error into the "from an unidentified developer" Gatekeeper
-          # prompt that users bypass once via right-click → Open. This
+          # error into the Gatekeeper warning that users bypass once via
+          # the documented first-launch path (on macOS 15 Sequoia:
+          # double-click, then System Settings -> Privacy & Security ->
+          # Open Anyway; on macOS 11-14: right-click -> Open). This
           # is the shipping model for most open-source Mac apps that
           # don't pay for the Developer Program (Calibre, OBS Studio,
           # MacDown, …).
@@ -192,6 +205,24 @@ jobs:
             -volname "AEMS Agent" \
             -srcfolder "dist/AEMS Agent.app" \
             -ov "dist/AEMS-Agent.dmg"
+
+      - name: Verify DMG contents (.app + plist + Applications symlink)
+        # Codex review pointed out that build.py used to drop
+        # com.aems.agent.plist into dist/ but never staged it into the
+        # DMG, so the docs claimed something the release artifact
+        # didn't actually contain. build.py now stages the .app, the
+        # plist, and a /Applications symlink into a folder that becomes
+        # the DMG root. Mount the built DMG read-only and assert all
+        # three are present so the gap can't reopen silently.
+        run: |
+          set -euo pipefail
+          mount_dir="$(mktemp -d /tmp/aems-dmg-XXXXXX)"
+          hdiutil attach -nobrowse -readonly -mountpoint "$mount_dir" "dist/AEMS-Agent.dmg"
+          trap 'hdiutil detach "$mount_dir" -force || true' EXIT
+          ls -la "$mount_dir"
+          test -d "$mount_dir/AEMS Agent.app" || { echo "::error::AEMS Agent.app missing from DMG"; exit 1; }
+          test -f "$mount_dir/com.aems.agent.plist" || { echo "::error::com.aems.agent.plist missing from DMG"; exit 1; }
+          test -L "$mount_dir/Applications" || { echo "::error::Applications symlink missing from DMG"; exit 1; }
 
       - name: Sign and notarize macOS DMG (Developer ID)
         if: steps.mac_sign_check.outputs.available == 'true'

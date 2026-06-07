@@ -152,6 +152,57 @@ def _locate_pyinstaller_macos_bundle() -> Path:
     return app_dir
 
 
+def _macos_launch_agent_plist() -> str:
+    """Return the bundled macOS LaunchAgent plist payload."""
+    return """<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key><string>com.aems.agent</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>/Applications/AEMS Agent.app/Contents/MacOS/aems-agent</string>
+        <string>run</string>
+        <string>--tray</string>
+    </array>
+    <key>RunAtLoad</key><true/>
+    <key>KeepAlive</key><true/>
+</dict>
+</plist>"""
+
+
+def _write_macos_launch_agent(path: Path) -> Path:
+    """Write the macOS LaunchAgent plist and return the output path."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(_macos_launch_agent_plist(), encoding="utf-8")
+    return path
+
+
+def _prepare_macos_dmg_staging_dir(app_dir: Path) -> Path:
+    """Stage the DMG contents next to the build output.
+
+    The DMG should contain the signed app bundle, the optional LaunchAgent
+    plist, and an ``/Applications`` symlink so Finder supports the
+    drag-to-Applications install convention without forcing users to open
+    a second window.
+    """
+    stage_dir = BUILD_DIR / "macos-dmg-stage"
+    if stage_dir.exists():
+        shutil.rmtree(stage_dir)
+    stage_dir.mkdir(parents=True, exist_ok=True)
+
+    staged_app_dir = stage_dir / app_dir.name
+    shutil.copytree(app_dir, staged_app_dir, symlinks=True)
+    _write_macos_launch_agent(stage_dir / "com.aems.agent.plist")
+
+    applications_link = stage_dir / "Applications"
+    if applications_link.exists() or applications_link.is_symlink():
+        applications_link.unlink()
+    os.symlink("/Applications", applications_link, target_is_directory=True)
+    return stage_dir
+
+
 def build_macos_dmg(dist_path: Path) -> Path:
     """Build the macOS DMG around the PyInstaller-produced .app bundle.
 
@@ -169,10 +220,12 @@ def build_macos_dmg(dist_path: Path) -> Path:
     app_name = "AEMS Agent"
     dmg_path = DIST_DIR / "AEMS-Agent.dmg"
     app_dir = _locate_pyinstaller_macos_bundle()
+    _write_macos_launch_agent(DIST_DIR / "com.aems.agent.plist")
 
     if os.environ.get("AEMS_AGENT_SKIP_DMG") == "1":
         print("  AEMS_AGENT_SKIP_DMG=1 — skipping hdiutil DMG creation")
     elif shutil.which("hdiutil"):
+        stage_dir = _prepare_macos_dmg_staging_dir(app_dir)
         if dmg_path.exists():
             dmg_path.unlink()
         run(
@@ -182,32 +235,12 @@ def build_macos_dmg(dist_path: Path) -> Path:
                 "-volname",
                 app_name,
                 "-srcfolder",
-                str(app_dir),
+                str(stage_dir),
                 "-ov",
                 str(dmg_path),
             ]
         )
         print(f"  macOS DMG: {dmg_path}")
-
-    # Write LaunchAgent plist to dist (not source tree)
-    launch_agent = DIST_DIR / "com.aems.agent.plist"
-    launch_agent.parent.mkdir(parents=True, exist_ok=True)
-    launch_agent.write_text("""<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
-  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-    <key>Label</key><string>com.aems.agent</string>
-    <key>ProgramArguments</key>
-    <array>
-        <string>/Applications/AEMS Agent.app/Contents/MacOS/aems-agent</string>
-        <string>run</string>
-        <string>--tray</string>
-    </array>
-    <key>RunAtLoad</key><true/>
-    <key>KeepAlive</key><true/>
-</dict>
-</plist>""")
 
     return dmg_path
 

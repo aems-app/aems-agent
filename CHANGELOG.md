@@ -2,6 +2,26 @@
 
 All notable changes to `aems-agent` are recorded here. Format follows [Keep a Changelog](https://keepachangelog.com/) and the project uses [SemVer](https://semver.org/).
 
+## 0.4.14 — 2026-06-07
+
+Follow-up to v0.4.13 acting on a Codex review of the macOS packaging slice. The Apple tester on v0.4.13 confirmed the app launches past Gatekeeper via the documented Sequoia path, surfacing three smaller gaps worth closing before declaring the slice done.
+
+### Fixed
+
+- **The DMG now actually contains the LaunchAgent plist + an `/Applications` symlink it has always advertised.** `packaging/build.py` previously built the DMG straight from the `.app` bundle and then wrote `com.aems.agent.plist` next to `AEMS-Agent.dmg` — the plist never made it into the DMG itself, contradicting both the README and `packaging/macos/README.md`. `_prepare_macos_dmg_staging_dir()` now stages the `.app`, the plist, and an `/Applications` symlink into a folder that becomes the DMG root, so the drag-to-Applications convention works without forcing users to find Applications in a separate Finder window. Regression-tested at the unit level (`test_build_macos_dmg_stages_app_launch_agent_and_applications_alias`) and at the artifact level (new CI step mounts the built DMG and asserts all three are present).
+- **macOS Finder / Applications / Spotlight icon is now AEMS brand navy, not the menu-bar status green.** v0.4.13 wired the `.icns` to `render_status_icon("green", …)`, which is the menu-bar tray badge whose palette encodes runtime state (green = running, yellow = no storage, red = error). That treatment is wrong for the product-identity icon Finder shows on the bundle. New `render_app_icon()` uses `APP_ICON_BRAND_COLOR = (0, 71, 145, 255)` — the same `--brand-primary: #004791` token the aems-web design system uses — with the AEMS glyph composited in white at a slightly larger Apple-HIG inset (~62% of the icon bounds), and a corner radius tuned to read as a modern macOS app icon. Tray rendering is unchanged.
+
+### Internal
+
+- New CI gate **smoke-tests the frozen `.app`** with `"dist/AEMS Agent.app/Contents/MacOS/aems-agent" --version` immediately after PyInstaller, before any signing step. If the BUNDLE migration silently broke a `hiddenimport`, a `ctypes.dlopen` lookup, or a relocated `Contents/Frameworks/` lib, the build fails before the release tag is published. This is the macOS analogue of the Windows `Verify installer exists` step.
+- New CI gate **mounts the built DMG and asserts the three top-level items** (`AEMS Agent.app/`, `com.aems.agent.plist`, `Applications` symlink). Catches DMG-staging regressions like the v0.4.13 missing-plist one before users see them.
+- Test coverage now asserts `APP_ICON_BRAND_COLOR == (0, 71, 145, 255)` and that the rendered app icon's brand-fill region matches navy at a sampled pixel, so a future revert to the green status palette fires the regression suite.
+- Windows ICO now also uses the new `render_app_icon()` instead of the green status badge, so the Start menu / taskbar icon matches the macOS Finder icon.
+
+### Carryover from Codex review (NOT shipped)
+
+- **Developer ID signing path still uses `codesign --force --deep`** in `.github/workflows/build.yml:158`. Apple's TN2206 recommends `--deep` for verification and inside-out signing for the actual signing pass. Left in place because validating the inside-out rewrite needs a real macOS host with the Developer ID identity available, which we don't have. The unpaid ad-hoc path is unaffected (PyInstaller handles signing).
+
 ## 0.4.13 — 2026-06-07
 
 The v0.4.11 + v0.4.12 ad-hoc codesign passes kept failing in CI with variants of `bundle format unrecognized, invalid, or unsuitable` because pre-0.4.13 the macOS bundle was hand-assembled into a flat layout (PyInstaller's onedir tree dropped under `Contents/MacOS/_internal/`). Apple's `codesign` interprets anything under `Contents/MacOS/` as nested-code territory and refuses to walk pip metadata dirs, the Python stdlib tree, or PyInstaller's embedded Python.framework that all sit there. No `codesign` flag combination rescues this layout — the fix is to stop using it.

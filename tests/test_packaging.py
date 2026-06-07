@@ -55,6 +55,14 @@ def test_workflow_relies_on_pyinstaller_signing_when_developer_id_absent() -> No
 
     assert "Verify PyInstaller ad-hoc signing (no Developer ID)" in workflow
     assert 'codesign --verify --deep --strict --verbose=2 "$APP"' in workflow
+    warning_line = next(
+        line for line in workflow.splitlines() if "App will ship ad-hoc signed;" in line
+    )
+    assert "right-click" not in warning_line, (
+        "the headline no-Developer-ID warning must not tell Sequoia users to "
+        "right-click -> Open; the documented path is now double-click, then "
+        "System Settings -> Privacy & Security -> Open Anyway."
+    )
     # Must NOT re-sign in the ad-hoc path — see TN2206 + the
     # v0.4.11..v0.4.12 CI history above.
     ad_hoc_block = workflow.split("Verify PyInstaller ad-hoc signing (no Developer ID)")[1].split(
@@ -179,3 +187,45 @@ def test_build_macos_dmg_honors_skip_env(tmp_path: Path, monkeypatch: pytest.Mon
 
     assert all("hdiutil" not in c[0] for c in calls), "hdiutil should not have been invoked"
     assert not (tmp_path / "dist" / "AEMS-Agent.dmg").exists()
+
+
+def test_build_macos_dmg_stages_app_launch_agent_and_applications_alias(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The DMG staging folder must include the app, LaunchAgent, and /Applications link.
+
+    The release docs tell users the DMG contains both ``AEMS Agent.app`` and
+    ``com.aems.agent.plist``. Building the DMG directly from the ``.app``
+    bundle drops the plist on the floor and forces users to hunt for
+    ``/Applications`` in a second Finder window. Regression-guard the
+    drag-to-Applications staging layout.
+    """
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "packaging"))
+    build = importlib.import_module("build")
+
+    (tmp_path / "dist" / "AEMS Agent.app" / "Contents" / "MacOS").mkdir(parents=True)
+
+    monkeypatch.setattr(build, "DIST_DIR", tmp_path / "dist")
+    monkeypatch.setattr(build, "BUILD_DIR", tmp_path / "build")
+    monkeypatch.delenv("AEMS_AGENT_SKIP_DMG", raising=False)
+    monkeypatch.setattr(build.shutil, "which", lambda _name: "/usr/bin/hdiutil")
+    symlink_calls: list[tuple[str, Path]] = []
+
+    def _fake_symlink(target: str, link_name: Path, target_is_directory: bool = False) -> None:
+        _ = target_is_directory
+        symlink_calls.append((target, link_name))
+
+    monkeypatch.setattr(build.os, "symlink", _fake_symlink)
+    calls: list[list[str]] = []
+    monkeypatch.setattr(build, "run", lambda cmd, cwd=None: calls.append(list(cmd)))
+
+    build.build_macos_dmg(tmp_path / "pyinstaller-out")
+
+    hdiutil_call = next(c for c in calls if c[0] == "hdiutil")
+    srcfolder = Path(hdiutil_call[hdiutil_call.index("-srcfolder") + 1])
+    app_dir = tmp_path / "dist" / "AEMS Agent.app"
+
+    assert srcfolder != app_dir, "DMG should be built from a staging folder, not the .app alone"
+    assert (srcfolder / "AEMS Agent.app").is_dir()
+    assert (srcfolder / "com.aems.agent.plist").is_file()
+    assert symlink_calls == [("/Applications", srcfolder / "Applications")]

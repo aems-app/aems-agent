@@ -22,7 +22,7 @@ Pre-built installers — no Python needed — are on the [Releases page](https:/
 | Platform | File | Notes |
 |----------|------|-------|
 | Windows | `aems-agent-setup.exe` | Installs to `%LOCALAPPDATA%\AEMS Agent` |
-| macOS   | `AEMS-Agent.dmg`       | Drag to Applications. **First launch: right-click the app → Open** (see below) |
+| macOS   | `AEMS-Agent.dmg`       | Drag to Applications. **First launch: see Sequoia + older-macOS steps below** |
 | Linux   | `aems-agent-linux-x86_64.tar.gz` | Extract, run `./install.sh`, then start `aems-agent run --tray` or enable the user service |
 
 #### macOS: first launch

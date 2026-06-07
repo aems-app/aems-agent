@@ -30,9 +30,21 @@ STATUS_COLORS: dict[str, tuple[int, int, int, int]] = {
 RUNTIME_ICON_SIZE = 64
 WINDOWS_ICON_SIZES: tuple[int, ...] = (16, 20, 24, 32, 40, 48, 64, 128, 256)
 
+# AEMS brand navy — matches `--brand-primary: #004791` from the aems-web
+# design tokens (src/aems/web/static/css/design-system/tokens.css).
+# Used for the macOS / Finder / Applications / Spotlight app icon so it
+# reads as product identity, NOT as the tray status badge whose green
+# variant means "agent is running".
+APP_ICON_BRAND_COLOR: tuple[int, int, int, int] = (0, 71, 145, 255)
+
 # The glyph occupies ~75% of the favicon viewBox. Inset the rendered
 # mask further inside the badge so it doesn't kiss the rounded edges.
 _GLYPH_INSET_RATIO = 0.18
+
+# App icon — a touch more padding around the glyph than the tray
+# badge, matching Apple HIG guidance that the central subject of a
+# macOS app icon occupy ~62% of the bounds.
+_APP_ICON_GLYPH_INSET_RATIO = 0.19
 
 # Pre-rendered SVG at 512x512 — high enough that downscaling to 16x16
 # tray icons stays crisp under Pillow's LANCZOS resampler.
@@ -99,11 +111,51 @@ def render_status_icon(color: str = "green", size: int = RUNTIME_ICON_SIZE) -> A
     return img
 
 
+def render_app_icon(size: int = RUNTIME_ICON_SIZE) -> Any:
+    """Render the macOS / Windows app icon at the requested size.
+
+    Different from :func:`render_status_icon`. The tray badge encodes
+    state — green = running, yellow = no storage, red = error — and
+    that traffic-light treatment is the wrong language for the
+    Finder / Applications / Spotlight icon, which should encode
+    *product identity*. This renderer uses AEMS brand navy
+    (``--brand-primary`` from the aems-web design tokens) with the
+    AEMS glyph composited in white at Apple-HIG-appropriate inset.
+
+    Apple's macOS app-icon mask is applied by the OS at draw time when
+    the icon is loaded out of a `.icns`, so we render a filled
+    rounded-rectangle and let macOS round it to the system squircle on
+    its own. We still use a generous corner radius so the standalone
+    PNG version (e.g. embedded in the Windows ICO) reads as a
+    contemporary app icon rather than a flat sticker.
+    """
+    from PIL import Image, ImageDraw
+
+    bg = APP_ICON_BRAND_COLOR
+    inset = max(2, round(size * 0.04))
+    radius = max(4, round(size * 0.225))  # Apple squircle approximation
+
+    img = Image.new("RGBA", (size, size), (0, 0, 0, 0))
+    draw = ImageDraw.Draw(img)
+    draw.rounded_rectangle(
+        (inset, inset, size - inset - 1, size - inset - 1),
+        radius=radius,
+        fill=bg,
+    )
+
+    glyph_size = max(1, round(size * (1 - 2 * _APP_ICON_GLYPH_INSET_RATIO)))
+    glyph_origin = (size - glyph_size) // 2
+    alpha = _load_logo_alpha().resize((glyph_size, glyph_size), Image.Resampling.LANCZOS)
+    white = Image.new("RGBA", (glyph_size, glyph_size), (255, 255, 255, 255))
+    img.paste(white, (glyph_origin, glyph_origin), alpha)
+    return img
+
+
 def ensure_windows_icon(path: Path) -> Path:
     """Generate the Windows ICO asset with multiple embedded sizes."""
     path.parent.mkdir(parents=True, exist_ok=True)
     largest = max(WINDOWS_ICON_SIZES)
-    base = render_status_icon("green", size=largest)
+    base = render_app_icon(size=largest)
     base.save(path, format="ICO", sizes=[(size, size) for size in WINDOWS_ICON_SIZES])
     return path
 
@@ -145,7 +197,11 @@ def ensure_macos_icns(path: Path) -> Path:
 
     body = bytearray()
     for type_code, size in _MACOS_ICNS_ENTRIES:
-        img = render_status_icon("green", size=size)
+        # Use the product-identity app icon (brand navy) here, NOT
+        # render_status_icon — the tray badge's green/yellow/red
+        # palette encodes runtime state, which is the wrong visual
+        # language for the Finder / Applications / Spotlight icon.
+        img = render_app_icon(size=size)
         buf = io.BytesIO()
         img.save(buf, format="PNG")
         payload = buf.getvalue()

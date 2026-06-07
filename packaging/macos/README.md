@@ -15,10 +15,11 @@ every tagged release.
   - `Contents/Resources/aems-agent.icns` — multi-resolution app icon
     (16, 32, 64, 128, 256, 512, 1024 px slots + retina @2x so Finder and
     the Dock look crisp at every zoom)
-  - `Contents/Info.plist` — `CFBundleIconFile=aems-agent`,
+  - `Contents/Info.plist` — `CFBundleIconFile=aems-agent.icns`,
     `NSHighResolutionCapable=true`, `LSUIElement=true`
     (background-only / no Dock entry)
 - `com.aems.agent.plist` — optional LaunchAgent (auto-start at login)
+- `Applications` — symlink for the standard drag-to-Applications install flow
 
 ## Code signing
 
@@ -111,7 +112,7 @@ drop all six secrets in the repo settings.
 After dragging the `.app` to Applications:
 
 ```bash
-cp com.aems.agent.plist ~/Library/LaunchAgents/
+cp "/Volumes/AEMS Agent/com.aems.agent.plist" ~/Library/LaunchAgents/
 launchctl load ~/Library/LaunchAgents/com.aems.agent.plist
 ```
 

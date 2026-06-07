@@ -17,6 +17,36 @@ def test_tray_icon_renders_native_runtime_size() -> None:
     assert icon.size == (64, 64)
 
 
+def test_app_icon_uses_brand_navy_not_status_green() -> None:
+    """The Finder / Applications / Spotlight icon must be brand navy, not tray green.
+
+    Codex pointed out that the v0.4.13 macOS app icon was the same green
+    status badge the menu bar uses — that encodes "agent is running",
+    not "this is AEMS". The product-identity icon must use the AEMS
+    brand color (`--brand-primary: #004791` from the aems-web design
+    tokens). This regression-guards that the constants don't silently
+    drift back to the status palette.
+    """
+    icons = importlib.import_module("aems_agent.icons")
+    assert icons.APP_ICON_BRAND_COLOR == (0, 71, 145, 255), (
+        f"app icon brand color must be AEMS navy (0, 71, 145, 255); got "
+        f"{icons.APP_ICON_BRAND_COLOR!r}"
+    )
+    # A pixel sampled near the center of the rendered icon (well inside
+    # the rounded-rect mask) should be brand navy — not the status
+    # green (46, 160, 67, 255).
+    img = icons.render_app_icon(size=256)
+    assert img.size == (256, 256)
+    # Top-left of where the glyph sits — outside the white glyph area
+    # but inside the brand-color fill — should match the navy fill.
+    center_corner = img.getpixel((40, 40))
+    assert center_corner[:3] == (
+        0,
+        71,
+        145,
+    ), f"app icon brand fill at (40, 40) must be AEMS navy; got {center_corner!r}"
+
+
 def test_ensure_windows_icon_creates_multires_ico(tmp_path: Path) -> None:
     """The packaged Windows app should have a real multi-resolution icon asset."""
     icons = importlib.import_module("aems_agent.icons")
