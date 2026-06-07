@@ -64,6 +64,17 @@ def test_ensure_macos_icns_creates_multires_icns(tmp_path: Path) -> None:
         offset += entry_size
     assert offset == len(raw), "icns walker overran the buffer"
 
-    required = {b"icp4", b"icp5", b"ic07", b"ic08", b"ic09", b"ic10", b"ic11", b"ic12", b"ic13", b"ic14"}
+    required = {
+        b"icp4",
+        b"icp5",
+        b"ic07",
+        b"ic08",
+        b"ic09",
+        b"ic10",
+        b"ic11",
+        b"ic12",
+        b"ic13",
+        b"ic14",
+    }
     missing = required - seen
     assert not missing, f"icns missing required entries: {sorted(missing)}"

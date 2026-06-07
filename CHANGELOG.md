@@ -2,6 +2,20 @@
 
 All notable changes to `aems-agent` are recorded here. Format follows [Keep a Changelog](https://keepachangelog.com/) and the project uses [SemVer](https://semver.org/).
 
+## 0.4.12 — 2026-06-07
+
+Follow-up patch: the v0.4.11 release surfaced three CI failures that blocked the macOS .dmg artifact from publishing. All three are now fixed and the macOS, Windows, and Linux jobs publish a full release set.
+
+### Fixed
+
+- **macOS `codesign --deep` rejected PyInstaller's `dist-info` directories.** The v0.4.11 ad-hoc signing step ran `codesign --force --deep --sign - "dist/AEMS Agent.app"` and bailed with `bundle format unrecognized, invalid, or unsuitable. In subcomponent: .../websockets-16.0.dist-info`. `codesign --deep` walks the bundle looking for nested bundles, and pip's `*.dist-info` and `*.egg-info` directories look like malformed bundles to it. The ad-hoc step now enumerates real Mach-O files under `Contents/MacOS/` with `find` + `file -b`, signs each one without `--deep`, then signs the main executable and the bundle wrapper. This produces a valid ad-hoc signature on every loaded binary without tripping over dist-info metadata.
+- **`packaging/build.py` crashed on Python 3.10 with `ModuleNotFoundError: tomllib`.** The new `_write_macos_app_bundle` helper added in v0.4.11 imported `tomllib` unconditionally; `tomllib` is stdlib only on Python 3.11+ and the project's `requires-python = ">=3.10"` means the 3.10 matrix entry in the test job failed. Now uses the same `if sys.version_info >= (3, 11): import tomllib else: import tomli as tomllib` shim the rest of the codebase uses.
+- **`black --check` failed on three new files.** `icons.py`, `tests/test_icons.py`, and `tests/test_packaging.py` were committed without running the formatter. All three are now reformatted to match the project style; `black --check` is green.
+
+### Internal
+
+- The workflow regression test now asserts the per-Mach-O signing call shape (`codesign --force --sign - --timestamp=none "$APP"` for the wrapper plus the same for the main executable) instead of the previous `--deep` invocation.
+
 ## 0.4.11 — 2026-06-07
 
 Unblocks the macOS install path that the v0.4.10 download surfaced as completely broken to an Apple-using tester: the unsigned, icon-less `.app` was rejected by Gatekeeper as "AEMS Agent is damaged" and rendered as a blank document icon in Finder.

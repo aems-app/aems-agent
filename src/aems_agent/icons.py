@@ -112,16 +112,16 @@ def ensure_windows_icon(path: Path) -> Path:
 # expects. The set mirrors what Finder, the Dock, and Spotlight pick
 # from on retina + non-retina displays.
 _MACOS_ICNS_ENTRIES: tuple[tuple[bytes, int], ...] = (
-    (b"icp4", 16),    # 16x16
-    (b"icp5", 32),    # 32x32
-    (b"ic07", 128),   # 128x128
-    (b"ic08", 256),   # 256x256
-    (b"ic09", 512),   # 512x512
+    (b"icp4", 16),  # 16x16
+    (b"icp5", 32),  # 32x32
+    (b"ic07", 128),  # 128x128
+    (b"ic08", 256),  # 256x256
+    (b"ic09", 512),  # 512x512
     (b"ic10", 1024),  # 1024x1024 / 512@2x
-    (b"ic11", 32),    # 16@2x
-    (b"ic12", 64),    # 32@2x
-    (b"ic13", 256),   # 128@2x
-    (b"ic14", 512),   # 256@2x
+    (b"ic11", 32),  # 16@2x
+    (b"ic12", 64),  # 32@2x
+    (b"ic13", 256),  # 128@2x
+    (b"ic14", 512),  # 256@2x
 )
 
 

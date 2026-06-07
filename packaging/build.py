@@ -157,7 +157,12 @@ def _write_macos_app_bundle(dist_path: Path) -> Path:
     icon_basename = "aems-agent"
     ensure_macos_icns(resources_dir / f"{icon_basename}.icns")
 
-    import tomllib
+    # tomllib is stdlib on 3.11+; the project's requires-python = ">=3.10",
+    # so the 3.10 matrix needs the tomli backport.
+    if sys.version_info >= (3, 11):
+        import tomllib
+    else:  # pragma: no cover - Python 3.10 backport path
+        import tomli as tomllib
 
     pyproject_path = PROJECT_ROOT / "pyproject.toml"
     with open(pyproject_path, "rb") as f:

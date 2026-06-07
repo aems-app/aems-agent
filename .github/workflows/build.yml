@@ -169,8 +169,26 @@ jobs:
           # open-source macOS apps (Calibre, Audacity, OBS pre-2020)
           # ship on. The user-facing instructions live in
           # packaging/macos/README.md and on the AEMS settings page.
-          codesign --force --deep --sign - "dist/AEMS Agent.app"
-          codesign --verify --deep --strict --verbose=2 "dist/AEMS Agent.app"
+          #
+          # We sign per-binary rather than with `codesign --deep`
+          # because PyInstaller's _internal/ subtree contains pip
+          # dist-info / egg-info directories that codesign mistakes
+          # for malformed nested bundles ("bundle format unrecognized,
+          # invalid, or unsuitable"). Walking Mach-O files directly
+          # and signing the wrapper last sidesteps that.
+          set -euo pipefail
+          APP="dist/AEMS Agent.app"
+          # Sign every nested Mach-O object (.so, .dylib, dylibs without
+          # an extension) inside the bundle.
+          while IFS= read -r -d '' f; do
+              if file -b "$f" | grep -qE 'Mach-O'; then
+                  codesign --force --sign - --timestamp=none "$f"
+              fi
+          done < <(find "$APP/Contents/MacOS" -type f -print0)
+          # Sign the main executable + the bundle wrapper.
+          codesign --force --sign - --timestamp=none "$APP/Contents/MacOS/aems-agent"
+          codesign --force --sign - --timestamp=none "$APP"
+          codesign --verify --verbose=2 "$APP"
 
       - name: Build DMG from signed .app
         run: |

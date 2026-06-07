@@ -53,7 +53,10 @@ def test_workflow_ad_hoc_signs_when_developer_id_absent() -> None:
     workflow = workflow_path.read_text(encoding="utf-8")
 
     assert "Ad-hoc sign macOS app bundle (no Developer ID)" in workflow
-    assert "codesign --force --deep --sign - \"dist/AEMS Agent.app\"" in workflow
+    # Ad-hoc path signs the bundle wrapper without --deep because
+    # PyInstaller dist-info dirs in _internal/ break codesign --deep.
+    assert 'codesign --force --sign - --timestamp=none "$APP"' in workflow
+    assert 'codesign --force --sign - --timestamp=none "$APP/Contents/MacOS/aems-agent"' in workflow
     assert "Sign macOS app bundle (Developer ID)" in workflow
     assert "Build DMG from signed .app" in workflow
     assert "AEMS_AGENT_SKIP_DMG" in workflow
@@ -70,7 +73,9 @@ def test_workflow_ad_hoc_signs_when_developer_id_absent() -> None:
     assert dmg_build_idx < dmg_sign_idx
 
 
-def test_macos_app_bundle_has_icon_and_high_dpi_keys(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_macos_app_bundle_has_icon_and_high_dpi_keys(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """macOS .app must ship a real icon, an Info.plist that references it, and retina opt-in.
 
     Pre-0.4.x bundles shipped without any Resources/aems-agent.icns or
