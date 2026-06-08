@@ -192,6 +192,17 @@ def test_macos_spec_uses_bundle_directive_with_brand_metadata() -> None:
     assert "'CFBundleIconFile': 'aems-agent.icns'" in spec_text
     assert "'NSHighResolutionCapable': True" in spec_text
     assert "'LSUIElement': True" in spec_text
+    # LSUIElement (agent app, no Dock icon) is correct for a menu-bar
+    # app; LSBackgroundOnly (pure background daemon) is NOT — it forbids
+    # the WindowServer from showing any UI, including the pystray
+    # NSStatusBar item. Setting both suppressed the tray icon so a Finder
+    # double-click ran `run --tray` but the user saw nothing in the menu
+    # bar, reproducing the "double-click does nothing" symptom v0.4.16
+    # tried to fix. Guard against the conflict reopening.
+    assert "'LSBackgroundOnly'" not in spec_text, (
+        "the macOS bundle must NOT declare LSBackgroundOnly — it "
+        "suppresses the menu-bar tray icon. Use LSUIElement alone."
+    )
     assert "ensure_macos_icns" in spec_text, (
         "the spec must render the multi-res .icns at build time so "
         "BUNDLE(icon=...) ships a real branded icon (not Finder's "

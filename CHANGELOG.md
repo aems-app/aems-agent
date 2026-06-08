@@ -2,6 +2,22 @@
 
 All notable changes to `aems-agent` are recorded here. Format follows [Keep a Changelog](https://keepachangelog.com/) and the project uses [SemVer](https://semver.org/).
 
+## 0.4.17 — 2026-06-08
+
+Critical macOS-only follow-up to v0.4.16. The double-click launcher fix in v0.4.16 made a Finder double-click run `run --tray`, but the `.app` bundle's `Info.plist` declared **both** `LSBackgroundOnly=true` and `LSUIElement=true`, which are contradictory. `LSBackgroundOnly` marks the app a pure background daemon that the WindowServer forbids from presenting any UI — including a menu-bar `NSStatusBar` item. So even though the agent now started, the pystray tray icon was suppressed and the user still saw nothing in the menu bar: the same "double-click does nothing" symptom v0.4.16 set out to fix (the agent server did start, so the website connected, but the tray menu — Settings / Set Storage Folder / Copy Token / Quit — was unreachable on macOS).
+
+### Fixed
+
+- **macOS menu-bar tray icon now appears.** `packaging/aems-agent.spec` drops `LSBackgroundOnly` from the bundle `info_plist` and keeps `LSUIElement=true` alone. `LSUIElement` is the correct "agent app" contract: no Dock icon, but the app may own a menu-bar status item. Tray rendering and all other launch paths are unchanged.
+
+### Internal
+
+- `test_macos_spec_uses_bundle_directive_with_brand_metadata` now asserts the spec does **not** contain `LSBackgroundOnly`, so the conflict cannot reopen silently.
+
+### Verification note
+
+- This change lives in the `sys.platform == 'darwin'` BUNDLE block, which only executes on a macOS host. It cannot be built or exercised on Linux/Windows CI runners. Final confirmation that the tray icon renders is the macOS release job plus an Apple tester double-clicking the built `.app`.
+
 ## 0.4.16 — 2026-06-07
 
 Critical macOS-only fix. The Apple tester on v0.4.13/v0.4.14/v0.4.15 got past Gatekeeper via the documented Sequoia path but then reported that double-clicking `AEMS Agent.app` did nothing visible. Codex traced this to a single launcher gap.

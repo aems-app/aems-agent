@@ -186,7 +186,16 @@ if sys.platform == 'darwin':
             'CFBundlePackageType': 'APPL',
             'CFBundleIconFile': 'aems-agent.icns',
             'LSMinimumSystemVersion': '11.0',
-            'LSBackgroundOnly': True,
+            # LSUIElement marks this an "agent" app: no Dock icon, but it
+            # CAN own a menu-bar NSStatusBar item (the pystray tray). We
+            # must NOT also set LSBackgroundOnly — that declares a pure
+            # background daemon which the WindowServer forbids from
+            # presenting any UI, including the status-bar item. Setting
+            # both suppressed the tray icon, so a Finder double-click ran
+            # `run --tray` but the user still saw nothing in the menu bar
+            # (the same "double-click does nothing" symptom v0.4.16 set
+            # out to fix). LSUIElement alone is the correct menu-bar-app
+            # contract.
             'LSUIElement': True,
             'NSHighResolutionCapable': True,
         },
