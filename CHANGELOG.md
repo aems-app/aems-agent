@@ -2,6 +2,19 @@
 
 All notable changes to `aems-agent` are recorded here. Format follows [Keep a Changelog](https://keepachangelog.com/) and the project uses [SemVer](https://semver.org/).
 
+## 0.4.19 — 2026-06-12
+
+Follow-up to v0.4.18 acting on a code review of the security-hardening slice. Completes the Canvas download size cap and closes two file-descriptor edge cases. No API surface change.
+
+### Fixed
+
+- **Canvas downloads are now capped while streaming, not after buffering.** v0.4.18 enforced `MAX_DOWNLOAD_BYTES` only after `httpx.AsyncClient.get()` had already read the entire response body into memory, so a hostile or buggy allowlisted host could still force the agent to buffer an arbitrarily large response before the check ran. The download now uses `http_client.stream(...)` and caps bytes while iterating `aiter_bytes()`, aborting the connection the moment the limit is crossed.
+- **No file-descriptor leak if `os.fdopen()` fails.** The owner-only secure writers in `config.py` and the pairing-PIN writer in `routes.py` opened a raw fd with `os.open()` and handed it to `os.fdopen()`; if `fdopen()` raised (e.g. resource exhaustion) the fd leaked. Both now close the fd on that failure path.
+
+### Internal
+
+- The Canvas download tests mock `client.stream()` (shared `_stream_client` helper) instead of `client.get()`, and cover the streaming size-cap abort.
+
 ## 0.4.18 — 2026-06-12
 
 Security-hardening release from a full-codebase review. No API surface changed for well-formed clients; several classes of malformed or hostile input are now rejected earlier and more cheaply, and the CI/release pipeline runs with least-privilege tokens.
