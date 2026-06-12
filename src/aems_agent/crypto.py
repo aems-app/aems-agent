@@ -26,8 +26,14 @@ def _write_secret_bytes(path: Path, data: bytes) -> None:
     Avoids the write-then-chmod window where the key is briefly readable by
     other local users. Windows ignores the POSIX mode and inherits ACLs from
     the parent directory instead.
+
+    ``O_BINARY`` is essential: on Windows ``os.open`` defaults to text mode,
+    so ``os.write`` would translate 0x0A bytes in the raw key to 0x0D 0x0A,
+    corrupting it (the key would no longer be 32 bytes). ``O_BINARY`` is 0 on
+    POSIX, so this is a no-op there.
     """
-    fd = os.open(str(path), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC | getattr(os, "O_BINARY", 0)
+    fd = os.open(str(path), flags, 0o600)
     try:
         os.write(fd, data)
     finally:

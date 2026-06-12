@@ -137,8 +137,13 @@ def _write_owner_only_text(path: Path, content: str) -> None:
     Avoids the write-then-chmod window where the file is briefly readable
     by other local users. On Windows the POSIX mode is ignored and the file
     inherits ACLs from its parent directory, matching previous behaviour.
+
+    ``O_BINARY`` (0 on POSIX) keeps the CRT from doing its own newline
+    translation on Windows; ``newline=""`` keeps the text layer from doing
+    it too, so the bytes written are exactly ``content`` on every platform.
     """
-    fd = os.open(str(path), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC | getattr(os, "O_BINARY", 0)
+    fd = os.open(str(path), flags, 0o600)
     with os.fdopen(fd, "w", encoding="utf-8", newline="") as handle:
         handle.write(content)
 

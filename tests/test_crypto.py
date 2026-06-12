@@ -101,6 +101,29 @@ def test_ensure_keypair_rederives_public_key_from_private(tmp_path):
     assert (tmp_path / "agent_private.key").read_bytes() == original_private
 
 
+def test_write_secret_bytes_is_byte_exact_with_control_chars(tmp_path):
+    """Raw key bytes (incl. 0x0A / 0x0D) must survive verbatim.
+
+    On Windows ``os.open`` defaults to text mode, so without ``O_BINARY``
+    the 0x0A in the key would expand to 0x0D 0x0A and the key would no
+    longer be 32 bytes. This guard is a no-op on POSIX but red on Windows.
+    """
+    from aems_agent.crypto import _write_secret_bytes
+
+    raw = bytes(range(32))  # 0x00..0x1F — includes 0x0A (LF) and 0x0D (CR)
+    target = tmp_path / "secret.bin"
+    _write_secret_bytes(target, raw)
+    assert target.read_bytes() == raw
+
+
+def test_keypair_private_key_is_exactly_32_bytes_on_disk(tmp_path):
+    """ensure_keypair must persist a 32-byte private key on every platform."""
+    from aems_agent.crypto import ensure_keypair
+
+    ensure_keypair(tmp_path)
+    assert (tmp_path / "agent_private.key").stat().st_size == 32
+
+
 def test_private_key_created_owner_only(tmp_path):
     """Private key must be 0600 from the moment it exists (POSIX)."""
     import os
