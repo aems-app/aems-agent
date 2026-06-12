@@ -20,6 +20,20 @@ _PRIVATE_KEY_FILE = "agent_private.key"
 _PUBLIC_KEY_FILE = "agent_public.key"
 
 
+def _write_secret_bytes(path: Path, data: bytes) -> None:
+    """Write *data* to *path*, created owner-only (0600) from the start.
+
+    Avoids the write-then-chmod window where the key is briefly readable by
+    other local users. Windows ignores the POSIX mode and inherits ACLs from
+    the parent directory instead.
+    """
+    fd = os.open(str(path), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    try:
+        os.write(fd, data)
+    finally:
+        os.close(fd)
+
+
 def ensure_keypair(config_dir: Path) -> None:
     """Generate keypair if missing. Idempotent.
 
@@ -31,14 +45,19 @@ def ensure_keypair(config_dir: Path) -> None:
     if priv_path.exists() and pub_path.exists():
         return
 
-    key = PrivateKey.generate()
     config_dir.mkdir(parents=True, exist_ok=True)
 
-    priv_path.write_bytes(bytes(key))
-    pub_path.write_bytes(bytes(key.public_key))
+    if priv_path.exists():
+        # Private key present but public key missing: rederive instead of
+        # regenerating, so payloads sealed to the existing key still decrypt
+        # and the advertised key id stays stable.
+        key = PrivateKey(priv_path.read_bytes())
+        pub_path.write_bytes(bytes(key.public_key))
+        return
 
-    if os.name != "nt":
-        priv_path.chmod(0o600)
+    key = PrivateKey.generate()
+    _write_secret_bytes(priv_path, bytes(key))
+    pub_path.write_bytes(bytes(key.public_key))
 
 
 def load_public_key(config_dir: Path) -> bytes:

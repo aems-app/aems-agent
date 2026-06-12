@@ -2226,7 +2226,12 @@ class TestPairingClipboard:
 
         ok = routes._copy_pin_to_clipboard("123456")
         assert ok is True
-        assert captured["argv"] == ["clip"]
+        argv = captured["argv"]
+        assert isinstance(argv, list) and len(argv) == 1
+        # Absolute System32 path, not a bare "clip" (CWD-relative resolution
+        # on Windows would allow binary planting).
+        assert str(argv[0]).lower().endswith("clip.exe")
+        assert "system32" in str(argv[0]).lower()
         assert captured["input"] == "123456"
         assert captured["text"] is True
         assert captured["encoding"] is None
@@ -2340,15 +2345,16 @@ class TestPairingClipboard:
         tmp_leftovers = list(tmp_path.glob("*.tmp"))
         assert tmp_leftovers == []
 
-    def test_pin_file_returns_false_on_write_error(self, tmp_path: Path, monkeypatch) -> None:
+    def test_pin_file_returns_false_on_write_error(self, tmp_path: Path) -> None:
         from aems_agent import routes
 
-        pin_path = tmp_path / "pin.json"
+        # Block the target's parent with a regular file so directory
+        # creation / the secure open both fail with OSError, exercising the
+        # error path without monkeypatching os internals.
+        blocker = tmp_path / "blocker"
+        blocker.write_text("not a directory", encoding="utf-8")
+        pin_path = blocker / "pin.json"
 
-        def _boom(*args: object, **kwargs: object) -> None:
-            raise OSError("disk full")
-
-        monkeypatch.setattr("pathlib.Path.write_text", _boom)
         ok = routes._maybe_write_pairing_pin_to_file(
             "555555",
             "http://127.0.0.1:8080",
@@ -2445,3 +2451,157 @@ class TestPairingHardening:
             headers={"Origin": origin},
         )
         assert locked_resp.status_code == 429
+
+
+class TestSegmentHardening:
+    """Reserved-name and length validation for path segments (v0.4.18)."""
+
+    @pytest.mark.parametrize("reserved", ["CON", "con", "PRN", "NUL", "COM1", "LPT9"])
+    def test_windows_reserved_device_names_rejected(
+        self, agent_client: Any, auth_headers: dict, reserved: str
+    ) -> None:
+        _skip_if_no_fastapi()
+        resp = agent_client.get(f"/files/{reserved}", headers=auth_headers)
+        assert resp.status_code == 400
+        assert "reserved" in resp.json()["detail"].lower()
+
+    def test_leading_underscore_assignment_id_rejected(
+        self, agent_client: Any, auth_headers: dict
+    ) -> None:
+        """`_data` / `_cache` are internal namespaces — API ids must not collide."""
+        _skip_if_no_fastapi()
+        resp = agent_client.delete("/files/_data", headers=auth_headers)
+        assert resp.status_code == 400
+        assert "reserved" in resp.json()["detail"].lower()
+
+    def test_leading_underscore_submission_id_rejected(
+        self, agent_client: Any, auth_headers: dict, sample_pdf: bytes
+    ) -> None:
+        _skip_if_no_fastapi()
+        resp = agent_client.put(
+            "/files/123/_cache",
+            content=sample_pdf,
+            headers={**auth_headers, "Content-Type": "application/pdf"},
+        )
+        assert resp.status_code == 400
+
+    def test_overlong_segment_rejected(self, agent_client: Any, auth_headers: dict) -> None:
+        _skip_if_no_fastapi()
+        resp = agent_client.get(f"/files/{'a' * 200}", headers=auth_headers)
+        assert resp.status_code == 400
+
+
+class TestUploadSizeCap:
+    """Streaming upload cap: oversized bodies are rejected with 413."""
+
+    def test_oversized_submission_rejected(
+        self,
+        agent_client: Any,
+        auth_headers: dict,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        _skip_if_no_fastapi()
+        from aems_agent import routes
+
+        monkeypatch.setattr(routes, "_MAX_UPLOAD_BYTES", 64)
+        body = b"%PDF-" + b"x" * 200
+        resp = agent_client.put(
+            "/files/123/456",
+            content=body,
+            headers={**auth_headers, "Content-Type": "application/pdf"},
+        )
+        assert resp.status_code == 413
+        assert "too large" in resp.json()["detail"].lower()
+
+    def test_oversized_annotated_rejected(
+        self,
+        agent_client: Any,
+        auth_headers: dict,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        _skip_if_no_fastapi()
+        from aems_agent import routes
+
+        monkeypatch.setattr(routes, "_MAX_UPLOAD_BYTES", 64)
+        body = b"%PDF-" + b"x" * 200
+        resp = agent_client.put(
+            "/files/123/456/annotated",
+            content=body,
+            headers={**auth_headers, "Content-Type": "application/pdf"},
+        )
+        assert resp.status_code == 413
+
+    def test_upload_within_cap_still_accepted(
+        self, agent_client: Any, auth_headers: dict, sample_pdf: bytes
+    ) -> None:
+        _skip_if_no_fastapi()
+        resp = agent_client.put(
+            "/files/123/456",
+            content=sample_pdf,
+            headers={**auth_headers, "Content-Type": "application/pdf"},
+        )
+        assert resp.status_code == 200
+
+
+class TestTokenEdgeCases:
+    """Bearer-token comparison must never 500 on hostile input."""
+
+    def test_non_ascii_token_returns_403_not_500(self, agent_client: Any) -> None:
+        """ASGI servers decode raw header bytes as latin-1; a non-ASCII token
+        used to raise TypeError inside secrets.compare_digest (str mode) and
+        surface as a 500. httpx refuses to send such headers itself, so
+        exercise the dependency directly with what Starlette would hand it."""
+        _skip_if_no_fastapi()
+        from fastapi import HTTPException
+
+        from aems_agent import routes
+
+        with pytest.raises(HTTPException) as excinfo:
+            routes._verify_token("Bearer caf\xe9-token-\xfc")
+        assert excinfo.value.status_code == 403
+
+
+class TestGradingBundleParamValidation:
+    """Render parameters must be validated before any PDF work happens."""
+
+    @pytest.mark.parametrize("dpi", [0, -1, 10000, "600", True, 3.5])
+    def test_invalid_dpi_rejected(self, agent_client: Any, auth_headers: dict, dpi: Any) -> None:
+        _skip_if_no_fastapi()
+        resp = agent_client.post(
+            "/grading-bundle/123/456",
+            json={"strategy": "multimodal", "dpi": dpi},
+            headers=auth_headers,
+        )
+        assert resp.status_code == 400
+        assert "dpi" in resp.json()["detail"].lower()
+
+    @pytest.mark.parametrize("max_pages", [0, -5, "3", True, 2.5])
+    def test_invalid_max_pages_rejected(
+        self, agent_client: Any, auth_headers: dict, max_pages: Any
+    ) -> None:
+        _skip_if_no_fastapi()
+        resp = agent_client.post(
+            "/grading-bundle/123/456",
+            json={"strategy": "text_only", "max_pages": max_pages},
+            headers=auth_headers,
+        )
+        assert resp.status_code == 400
+        assert "max_pages" in resp.json()["detail"].lower()
+
+    def test_invalid_force_refresh_rejected(self, agent_client: Any, auth_headers: dict) -> None:
+        _skip_if_no_fastapi()
+        resp = agent_client.post(
+            "/grading-bundle/123/456",
+            json={"strategy": "text_only", "force_refresh": "yes"},
+            headers=auth_headers,
+        )
+        assert resp.status_code == 400
+
+    def test_non_object_body_rejected(self, agent_client: Any, auth_headers: dict) -> None:
+        _skip_if_no_fastapi()
+        resp = agent_client.post(
+            "/grading-bundle/123/456",
+            json=["not", "a", "dict"],
+            headers=auth_headers,
+        )
+        assert resp.status_code == 400

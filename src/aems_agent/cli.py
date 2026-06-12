@@ -274,21 +274,42 @@ def _preflight_port_or_die(host: str, port: int) -> None:
     """
     import socket
 
-    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    # Resolve the bind family from the host so IPv6 hosts (e.g. ::1) probe
+    # correctly instead of always failing the AF_INET bind.
+    family = socket.AF_INET
+    sockaddr: Any = (host, port)
     try:
-        sock.bind((host, port))
+        infos = socket.getaddrinfo(host, port, type=socket.SOCK_STREAM)
+        if infos:
+            family, _socktype, _proto, _canonname, sockaddr = infos[0]
+    except (socket.gaierror, OSError):
+        pass
+
+    sock = socket.socket(family, socket.SOCK_STREAM)
+    try:
+        sock.bind(sockaddr)
     except OSError:
         # Port is taken — is it another AEMS Agent?
         already_aems = False
+        probe_host = host
+        if probe_host in ("0.0.0.0", "::", "[::]"):
+            # Wildcard binds answer on loopback; connecting to the wildcard
+            # address itself fails on Windows.
+            probe_host = "127.0.0.1"
+        if ":" in probe_host and not probe_host.startswith("["):
+            probe_host = f"[{probe_host}]"
         try:
             import urllib.request
 
+            # /status is the unauthenticated liveness endpoint. /health
+            # requires a bearer token, so probing it always raised and the
+            # "agent already running" dialog could never appear.
             with urllib.request.urlopen(  # noqa: S310 - localhost only
-                f"http://{host}:{port}/health", timeout=1.0
+                f"http://{probe_host}:{port}/status", timeout=1.0
             ) as resp:
                 if resp.status == 200:
-                    body = resp.read(256).decode("utf-8", errors="ignore").lower()
-                    if "aems" in body or "ok" in body:
+                    body = resp.read(512).decode("utf-8", errors="ignore").lower()
+                    if "aems-agent" in body:
                         already_aems = True
         except Exception:
             pass

@@ -11,9 +11,12 @@ on:
         required: false
         default: "dev"
 
+# Least privilege by default; the release job elevates only what it needs
+# (contents: write to create the GitHub release, id-token: write for
+# cosign keyless signing). Build jobs run third-party tooling over the
+# tree and should not hold a write-capable token.
 permissions:
-  contents: write
-  id-token: write
+  contents: read
 
 jobs:
   build-windows:
@@ -279,6 +282,9 @@ jobs:
     needs: [build-windows, build-macos, build-linux]
     runs-on: ubuntu-latest
     if: startsWith(github.ref, 'refs/tags/v')
+    permissions:
+      contents: write
+      id-token: write
     steps:
       - uses: actions/checkout@v4
 

@@ -37,6 +37,53 @@ logger = logging.getLogger(__name__)
 MAX_JOBS = 100
 SUPPORTED_MANIFEST_VERSION = 1
 
+# Cap for a single submission download (matches the agent's upload cap).
+MAX_DOWNLOAD_BYTES = 200 * 1024 * 1024
+
+
+def _file_sha256(path: Path) -> str:
+    """Compute a SHA-256 digest without buffering the whole file in memory."""
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(64 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _build_download_url(canvas_base: str, download_url: Any) -> str:
+    """Join a manifest ``download_url`` onto the validated Canvas base URL.
+
+    The manifest is produced by the AEMS server and sealed to this agent,
+    but defence-in-depth still applies: a value like ``@evil.com/x`` or a
+    full URL would otherwise redirect the request — including the Canvas
+    bearer token — to a host outside the validated allowlist. Require an
+    absolute path and verify the joined URL still resolves to the same
+    scheme/host/port as ``canvas_base``.
+
+    Raises:
+        ValueError: If the download URL is missing, relative, or escapes
+            the Canvas host.
+    """
+    if not isinstance(download_url, str) or not download_url.startswith("/"):
+        raise ValueError("Invalid download_url: must be an absolute path on the Canvas host")
+    if download_url.startswith("//"):
+        # Protocol-relative form: harmless under plain concatenation, but it
+        # would resolve to another authority under urljoin-style handling.
+        raise ValueError("Invalid download_url: protocol-relative paths are not allowed")
+
+    url = canvas_base + download_url
+    base = urlparse(canvas_base)
+    final = urlparse(url)
+    if (
+        final.scheme != "https"
+        or final.hostname != base.hostname
+        or final.port != base.port
+        or final.username is not None
+        or final.password is not None
+    ):
+        raise ValueError("Invalid download_url: resolves outside the Canvas host")
+    return url
+
 
 class ManifestValidationError(Exception):
     """Raised when a download manifest fails validation."""
@@ -175,7 +222,7 @@ async def download_submissions(
                         )
                         pass  # Not a valid PDF — fall through to re-download
                     else:
-                        sha = hashlib.sha256(target_file.read_bytes()).hexdigest()
+                        sha = _file_sha256(target_file)
                         result = SubmissionResult(sid, "skipped", sha256=sha)
                         results.append(result)
                         if progress_callback is not None:
@@ -185,16 +232,26 @@ async def download_submissions(
                     pass  # Can't read file — fall through to re-download
             else:
                 # Size matches expected_size — skip
-                sha = hashlib.sha256(target_file.read_bytes()).hexdigest()
+                sha = _file_sha256(target_file)
                 result = SubmissionResult(sid, "skipped", sha256=sha)
                 results.append(result)
                 if progress_callback is not None:
                     progress_callback(result)
                 continue
 
+        # Validate the download URL before any request leaves the agent so a
+        # hostile path cannot leak the Canvas token to another host.
+        try:
+            url = _build_download_url(canvas_base, sub.get("download_url"))
+        except ValueError as e:
+            result = SubmissionResult(sid, "failed", error=str(e))
+            results.append(result)
+            if progress_callback is not None:
+                progress_callback(result)
+            continue
+
         # Download
         try:
-            url = canvas_base + sub["download_url"]
             resp = await http_client.get(
                 url,
                 headers={"Authorization": f"Bearer {token}"},
@@ -203,6 +260,17 @@ async def download_submissions(
             )
             resp.raise_for_status()
             content = resp.content
+
+            if len(content) > MAX_DOWNLOAD_BYTES:
+                result = SubmissionResult(
+                    sid,
+                    "failed",
+                    error=f"Download exceeds size limit ({MAX_DOWNLOAD_BYTES // (1024 * 1024)} MB)",
+                )
+                results.append(result)
+                if progress_callback is not None:
+                    progress_callback(result)
+                continue
 
             # Validate PDF magic bytes
             if not content[:5] == b"%PDF-":

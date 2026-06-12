@@ -509,3 +509,125 @@ class TestDownloadJob:
 
         # Should not exceed MAX_JOBS
         assert len(_download_jobs) <= 100
+
+
+# ---------------------------------------------------------------------------
+# Download URL pinning + size cap (v0.4.18)
+# ---------------------------------------------------------------------------
+
+
+class TestDownloadUrlPinning:
+    """download_url must never route the Canvas token off the validated host."""
+
+    @pytest.mark.asyncio
+    async def test_full_url_download_url_marked_failed(self, tmp_path: Path) -> None:
+        """An absolute URL smuggled into download_url must not be fetched."""
+        from aems_agent.canvas_download import download_submissions
+
+        manifest = _make_manifest()
+        manifest["submissions"][0]["download_url"] = "https://evil.example.com/exfil"
+
+        mock_client = AsyncMock()
+        results = await download_submissions(
+            manifest=manifest,
+            storage_path=tmp_path,
+            http_client=mock_client,
+        )
+
+        assert results[0].status == "failed"
+        assert "download_url" in results[0].error
+        mock_client.get.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_userinfo_trick_download_url_marked_failed(self, tmp_path: Path) -> None:
+        """`@evil.com/...` would turn the Canvas host into URL userinfo."""
+        from aems_agent.canvas_download import download_submissions
+
+        manifest = _make_manifest()
+        manifest["submissions"][0]["download_url"] = "@evil.example.com/exfil"
+
+        mock_client = AsyncMock()
+        results = await download_submissions(
+            manifest=manifest,
+            storage_path=tmp_path,
+            http_client=mock_client,
+        )
+
+        assert results[0].status == "failed"
+        mock_client.get.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_missing_download_url_marked_failed(self, tmp_path: Path) -> None:
+        from aems_agent.canvas_download import download_submissions
+
+        manifest = _make_manifest()
+        del manifest["submissions"][0]["download_url"]
+
+        mock_client = AsyncMock()
+        results = await download_submissions(
+            manifest=manifest,
+            storage_path=tmp_path,
+            http_client=mock_client,
+        )
+
+        assert results[0].status == "failed"
+        mock_client.get.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_valid_path_download_url_still_fetched(self, tmp_path: Path) -> None:
+        from aems_agent.canvas_download import download_submissions
+
+        pdf_content = b"%PDF-1.4 pinned host ok"
+        mock_response = AsyncMock()
+        mock_response.content = pdf_content
+        mock_response.raise_for_status = lambda: None
+        mock_client = AsyncMock()
+        mock_client.get.return_value = mock_response
+
+        manifest = _make_manifest()
+        results = await download_submissions(
+            manifest=manifest,
+            storage_path=tmp_path,
+            http_client=mock_client,
+        )
+
+        assert results[0].status == "downloaded"
+        called_url = mock_client.get.call_args[0][0]
+        assert called_url == "https://university.instructure.com/files/569/download"
+
+    def test_build_download_url_rejects_protocol_relative(self) -> None:
+        """A `//host/path` value must not survive validation on a hostile base."""
+        from aems_agent.canvas_download import _build_download_url
+
+        with pytest.raises(ValueError):
+            _build_download_url("https://school.instructure.com", "//evil.example.com/x")
+
+
+class TestDownloadSizeCap:
+    """Oversized Canvas responses are rejected instead of written to disk."""
+
+    @pytest.mark.asyncio
+    async def test_oversized_download_marked_failed(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from aems_agent import canvas_download
+        from aems_agent.canvas_download import download_submissions
+
+        monkeypatch.setattr(canvas_download, "MAX_DOWNLOAD_BYTES", 16)
+
+        mock_response = AsyncMock()
+        mock_response.content = b"%PDF-" + b"y" * 64
+        mock_response.raise_for_status = lambda: None
+        mock_client = AsyncMock()
+        mock_client.get.return_value = mock_response
+
+        manifest = _make_manifest()
+        results = await download_submissions(
+            manifest=manifest,
+            storage_path=tmp_path,
+            http_client=mock_client,
+        )
+
+        assert results[0].status == "failed"
+        assert "size limit" in results[0].error
+        assert not (tmp_path / "100" / "1001" / "submission.pdf").exists()

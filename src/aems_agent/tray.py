@@ -24,7 +24,7 @@ import webbrowser
 from pathlib import Path
 from typing import Any, Optional
 
-from .clipboard import copy_text_to_clipboard
+from .clipboard import copy_text_to_clipboard, windows_system32_dir
 from .icons import RUNTIME_ICON_SIZE, render_status_icon
 
 logger = logging.getLogger(__name__)
@@ -79,10 +79,13 @@ try {
     # Storage Folder" click flashes a black shell window next to the folder
     # dialog, which looks alarming to non-technical users.
     creationflags = getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000)
+    # Absolute path: bare "powershell" resolves against the CWD before PATH
+    # on Windows, which would execute a planted powershell.exe.
+    powershell_exe = str(windows_system32_dir() / "WindowsPowerShell" / "v1.0" / "powershell.exe")
     try:
         completed = subprocess.run(
             [
-                "powershell",
+                powershell_exe,
                 "-NoProfile",
                 "-NonInteractive",
                 "-STA",

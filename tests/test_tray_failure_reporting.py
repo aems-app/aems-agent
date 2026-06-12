@@ -4,8 +4,18 @@ from __future__ import annotations
 
 import time
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 from unittest.mock import MagicMock, patch
+
+
+def _wait_for(predicate: Callable[[], bool], timeout: float = 5.0) -> bool:
+    """Poll *predicate* until true or *timeout* — fixed sleeps flake on slow CI."""
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if predicate():
+            return True
+        time.sleep(0.01)
+    return predicate()
 
 
 def test_tray_thread_failure_is_captured_in_app_state(tmp_path: Path) -> None:
@@ -26,8 +36,8 @@ def test_tray_thread_failure_is_captured_in_app_state(tmp_path: Path) -> None:
         create.return_value = icon
 
         _start_tray(tmp_path, fake_app)
-        # Give the daemon thread a moment to enter run() and raise.
-        time.sleep(0.2)
+        # Wait for the daemon thread to enter run() and raise.
+        _wait_for(lambda: fake_app.state.tray_status == "failed")
 
     assert (
         fake_app.state.tray_status == "failed"
@@ -51,11 +61,11 @@ def test_tray_thread_success_sets_running(tmp_path: Path) -> None:
         create.return_value = icon
 
         _start_tray(tmp_path, fake_app)
-        time.sleep(0.2)
+        _wait_for(lambda: fake_app.state.tray_status == "running")
 
     assert fake_app.state.tray_status in {"running", "starting"}, (
         # 'running' is the expected final state; 'starting' is acceptable if the
-        # thread hasn't yet entered run() -- but it should clear within 200ms.
+        # thread hasn't yet entered run().
         f"Expected tray_status='running' (or 'starting' if pre-thread), got {fake_app.state.tray_status!r}"
     )
 

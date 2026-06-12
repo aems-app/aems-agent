@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "aems-agent"
-version = "0.4.17"
+version = "0.4.18"
 description = "AEMS Local Bridge Agent — local filesystem access for exam PDFs"
 authors = [{name = "AEMS Team", email = "contact@aems.app"}]
 readme = "README.md"
@@ -24,13 +24,21 @@ classifiers = [
 ]
 
 dependencies = [
-    "fastapi>=0.104.0",
+    # fastapi>=0.115 pulls starlette>=0.40, which fixes the multipart DoS
+    # CVE-2024-47874 in older starlette releases.
+    "fastapi>=0.115.0",
     "uvicorn[standard]>=0.24.0",
+    # h11 is transitive (uvicorn), but pin the floor explicitly: h11<0.16
+    # is vulnerable to request smuggling (CVE-2025-43859), which matters
+    # for a localhost HTTP server.
+    "h11>=0.16.0",
     "httpx>=0.25.0",
     "typer>=0.9.0",
     "pydantic>=2.0.0",
     "pynacl>=1.5.0",
-    "pillow>=10.0.0",
+    # pillow<10.3 is vulnerable to CVE-2023-50447 (ImageMath eval) and
+    # CVE-2024-28219 (_imagingcms buffer overflow).
+    "pillow>=10.3.0",
     "aems-pdf-annotator>=0.2.0,<0.4.0",
     "pymupdf>=1.25.0",
     # pystray is required for the tray notification that surfaces the
@@ -48,7 +56,7 @@ Issues = "https://github.com/aems-app/aems-agent/issues"
 Changelog = "https://github.com/aems-app/aems-agent/blob/main/CHANGELOG.md"
 
 [project.optional-dependencies]
-tray = ["pystray>=0.19.0", "pillow>=10.0.0"]
+tray = ["pystray>=0.19.0", "pillow>=10.3.0"]
 build = ["pyinstaller>=6.20.0,<7.0.0"]
 dev = [
     "pytest>=7.4.0",

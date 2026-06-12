@@ -80,3 +80,38 @@ def test_ensure_keypair_creates_parent_dirs(tmp_path):
     ensure_keypair(nested)
     assert (nested / "agent_private.key").exists()
     assert (nested / "agent_public.key").exists()
+
+
+def test_ensure_keypair_rederives_public_key_from_private(tmp_path):
+    """Losing only the public key must not rotate the keypair.
+
+    Regenerating would silently change the key id, breaking every payload
+    the server sealed to the original key.
+    """
+    from aems_agent.crypto import ensure_keypair, get_key_id
+
+    ensure_keypair(tmp_path)
+    original_key_id = get_key_id(tmp_path)
+    original_private = (tmp_path / "agent_private.key").read_bytes()
+
+    (tmp_path / "agent_public.key").unlink()
+    ensure_keypair(tmp_path)
+
+    assert get_key_id(tmp_path) == original_key_id
+    assert (tmp_path / "agent_private.key").read_bytes() == original_private
+
+
+def test_private_key_created_owner_only(tmp_path):
+    """Private key must be 0600 from the moment it exists (POSIX)."""
+    import os
+
+    if os.name == "nt":
+        import pytest
+
+        pytest.skip("POSIX permission semantics only")
+
+    from aems_agent.crypto import ensure_keypair
+
+    ensure_keypair(tmp_path)
+    mode = (tmp_path / "agent_private.key").stat().st_mode & 0o777
+    assert mode == 0o600

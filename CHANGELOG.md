@@ -2,6 +2,32 @@
 
 All notable changes to `aems-agent` are recorded here. Format follows [Keep a Changelog](https://keepachangelog.com/) and the project uses [SemVer](https://semver.org/).
 
+## 0.4.18 — 2026-06-12
+
+Security-hardening release from a full-codebase review. No API surface changed for well-formed clients; several classes of malformed or hostile input are now rejected earlier and more cheaply, and the CI/release pipeline runs with least-privilege tokens.
+
+### Security
+
+- **Canvas download URLs are pinned to the manifest host.** `download_submissions()` previously joined `download_url` onto `canvas_base_url` by string concatenation, so a manifest carrying `@evil.example.com/x` (or a full URL) would have redirected the request — including the Canvas bearer token — to a host outside the validated allowlist. `_build_download_url()` now requires an absolute path and verifies the joined URL still resolves to the same scheme/host/port as the validated Canvas base; offending submissions are marked `failed` without any request leaving the agent. Protocol-relative (`//host/…`) paths are rejected too, so a future refactor to `urljoin` semantics cannot reopen the gap.
+- **PDF uploads are size-capped while streaming.** `PUT /files/...` and `PUT /files/.../annotated` read the whole request body into memory *before* checking the 200 MB cap, so an oversized body was buffered in full before being rejected — a memory-exhaustion vector. Both routes now stream through the same bounded reader the JSON endpoints use and abort with 413 as soon as the cap is crossed (or up front via `Content-Length`). Canvas downloads gained a matching 200 MB cap, and skip-path hashing is chunked instead of `read_bytes()`.
+- **`/grading-bundle` render parameters are validated.** `dpi` (int, 30–600), `max_pages` (positive int), and `force_refresh` (bool) are now type- and range-checked before any PDF work. Previously `dpi: 100000` would render an arbitrarily large pixmap (memory exhaustion) and non-int types crashed the worker with a 500.
+- **Path segments reject reserved names.** `assignment_id`/`submission_id` now refuse Windows reserved device names (`CON`, `PRN`, `AUX`, `NUL`, `COM1-9`, `LPT1-9` — the storage folder may live on a Windows volume even when the agent doesn't), enforce a 128-char cap, and refuse a leading underscore: `_data`/`_cache` are agent-internal namespaces, and `DELETE /files/_data` would otherwise have deleted every stored grading result across all assignments.
+- **Secrets are created owner-only, atomically.** The auth token, the X25519 private key, `config.json`, and the headless pairing-PIN file were written with default permissions and then `chmod`ed, leaving a window where they were world-readable on multi-user POSIX systems. All are now created `0600` via `os.open(..., O_CREAT, 0o600)`. Legacy token/config files are tightened on next access.
+- **Keypair recovery no longer rotates the key.** If only `agent_public.key` went missing, `ensure_keypair()` regenerated a whole new keypair, silently invalidating every payload the server had sealed to the old key. The public key is now rederived from the surviving private key, keeping the advertised `encryption_key_id` stable.
+- **Windows system binaries are invoked by absolute path.** `clip` and `powershell` were resolved by bare name; Windows `CreateProcess` searches the current working directory before `PATH`, so a planted `clip.exe`/`powershell.exe` next to the launch directory would have been executed. Both now resolve under `%SystemRoot%\System32`, and `pbcopy` uses `/usr/bin/pbcopy` on macOS.
+- **Bearer-token comparison can't 500.** `secrets.compare_digest` in str mode raises `TypeError` on non-ASCII input (ASGI servers decode raw header bytes as latin-1), which surfaced as a 500; the comparison now runs on UTF-8 bytes and hostile tokens get a clean 403.
+- **CI/release workflows run least-privilege.** `ci.yml` is pinned to `contents: read`; `build.yml`'s build jobs (which execute third-party tooling) drop from workflow-wide `contents: write` to `read`, with `contents: write` + `id-token: write` granted only to the `release` job that actually publishes.
+- **Dependency floors exclude known-vulnerable releases:** `pillow>=10.3.0` (CVE-2023-50447 ImageMath eval, CVE-2024-28219 buffer overflow), `fastapi>=0.115.0` (pulls starlette ≥0.40, multipart DoS CVE-2024-47874), and an explicit `h11>=0.16.0` floor (request smuggling CVE-2025-43859 — h11 is uvicorn-transitive but the agent is an HTTP server, so the floor is pinned directly).
+
+### Fixed
+
+- **"Agent already running" detection actually works now.** The pre-flight port probe queried `/health`, which requires a bearer token — the probe always got 401 and every port conflict was misreported as "another program is using the port". It now probes the unauthenticated `/status` endpoint and matches the `aems-agent` service marker. The probe also resolves the bind address family via `getaddrinfo`, so `--host ::1` no longer fails the IPv4-only pre-flight bind, and wildcard hosts probe via loopback (connecting to `0.0.0.0` fails on Windows).
+
+### Internal
+
+- 40 new regression tests: URL pinning (full-URL / userinfo / protocol-relative / missing `download_url`), download + upload size caps, reserved/overlong path segments, grading-bundle parameter validation, non-ASCII token handling, owner-only file modes (POSIX), public-key rederivation stability, and pre-flight port-check behaviour (free port / foreign squatter / running agent).
+- `test_tray_failure_reporting` waits on a deadline poll instead of a fixed 200 ms sleep, removing an order-dependent flake on slow CI runners.
+
 ## 0.4.17 — 2026-06-08
 
 Critical macOS-only follow-up to v0.4.16. The double-click launcher fix in v0.4.16 made a Finder double-click run `run --tray`, but the `.app` bundle's `Info.plist` declared **both** `LSBackgroundOnly=true` and `LSUIElement=true`, which are contradictory. `LSBackgroundOnly` marks the app a pure background daemon that the WindowServer forbids from presenting any UI — including a menu-bar `NSStatusBar` item. So even though the agent now started, the pystray tray icon was suppressed and the user still saw nothing in the menu bar: the same "double-click does nothing" symptom v0.4.16 set out to fix (the agent server did start, so the website connected, but the tray menu — Settings / Set Storage Folder / Copy Token / Quit — was unreachable on macOS).
