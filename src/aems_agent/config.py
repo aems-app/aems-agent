@@ -144,7 +144,12 @@ def _write_owner_only_text(path: Path, content: str) -> None:
     """
     flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC | getattr(os, "O_BINARY", 0)
     fd = os.open(str(path), flags, 0o600)
-    with os.fdopen(fd, "w", encoding="utf-8", newline="") as handle:
+    try:
+        handle = os.fdopen(fd, "w", encoding="utf-8", newline="")
+    except BaseException:
+        os.close(fd)  # fdopen didn't take ownership of the fd; close it ourselves
+        raise
+    with handle:
         handle.write(content)
 
 

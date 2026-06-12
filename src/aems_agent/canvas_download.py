@@ -85,6 +85,40 @@ def _build_download_url(canvas_base: str, download_url: Any) -> str:
     return url
 
 
+async def _stream_download_capped(
+    http_client: httpx.AsyncClient,
+    url: str,
+    token: str,
+    max_bytes: int,
+) -> tuple[bytes, bool]:
+    """Download *url* with the Canvas token, aborting once *max_bytes* is crossed.
+
+    Uses a streaming request and caps bytes while iterating so a hostile or
+    buggy server cannot force the agent to buffer an arbitrarily large body in
+    memory before the size check runs (``AsyncClient.get`` would read the whole
+    body first). The connection is closed as soon as the limit is exceeded.
+
+    Returns ``(content, too_large)``. When ``too_large`` is True the content is
+    empty and the caller should reject the submission.
+    """
+    chunks: list[bytes] = []
+    total = 0
+    async with http_client.stream(
+        "GET",
+        url,
+        headers={"Authorization": f"Bearer {token}"},
+        follow_redirects=True,
+        timeout=60.0,
+    ) as resp:
+        resp.raise_for_status()
+        async for chunk in resp.aiter_bytes():
+            total += len(chunk)
+            if total > max_bytes:
+                return b"", True
+            chunks.append(chunk)
+    return b"".join(chunks), False
+
+
 class ManifestValidationError(Exception):
     """Raised when a download manifest fails validation."""
 
@@ -252,16 +286,11 @@ async def download_submissions(
 
         # Download
         try:
-            resp = await http_client.get(
-                url,
-                headers={"Authorization": f"Bearer {token}"},
-                follow_redirects=True,
-                timeout=60.0,
+            content, too_large = await _stream_download_capped(
+                http_client, url, token, MAX_DOWNLOAD_BYTES
             )
-            resp.raise_for_status()
-            content = resp.content
 
-            if len(content) > MAX_DOWNLOAD_BYTES:
+            if too_large:
                 result = SubmissionResult(
                     sid,
                     "failed",

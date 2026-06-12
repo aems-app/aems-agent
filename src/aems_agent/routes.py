@@ -875,7 +875,12 @@ def _maybe_write_pairing_pin_to_file(
         # POSIX) + newline="" keeps the written bytes identical cross-platform.
         flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC | getattr(os, "O_BINARY", 0)
         fd = os.open(str(tmp), flags, 0o600)
-        with os.fdopen(fd, "w", encoding="utf-8", newline="") as handle:
+        try:
+            handle = os.fdopen(fd, "w", encoding="utf-8", newline="")
+        except BaseException:
+            os.close(fd)  # fdopen didn't take ownership of the fd; close it ourselves
+            raise
+        with handle:
             handle.write(payload + "\n")
         os.replace(tmp, path)
     except OSError as exc:
