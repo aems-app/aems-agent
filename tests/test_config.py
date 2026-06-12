@@ -177,3 +177,46 @@ class TestAuthToken:
 
         token = ensure_auth_token(config_dir)
         assert get_auth_token(config_dir) == token
+
+
+class TestSecretFilePermissions:
+    """Token and config files are created owner-only, not chmod'd after."""
+
+    def test_auth_token_created_owner_only(self, tmp_path: Path) -> None:
+        import os
+
+        if os.name == "nt":
+            pytest.skip("POSIX permission semantics only")
+
+        from aems_agent.config import ensure_auth_token
+
+        ensure_auth_token(tmp_path)
+        mode = (tmp_path / "auth_token").stat().st_mode & 0o777
+        assert mode == 0o600
+
+    def test_legacy_token_permissions_tightened_on_read(self, tmp_path: Path) -> None:
+        import os
+
+        if os.name == "nt":
+            pytest.skip("POSIX permission semantics only")
+
+        from aems_agent.config import ensure_auth_token
+
+        token_file = tmp_path / "auth_token"
+        token_file.write_text("legacy-token", encoding="utf-8")
+        token_file.chmod(0o644)
+
+        assert ensure_auth_token(tmp_path) == "legacy-token"
+        assert token_file.stat().st_mode & 0o777 == 0o600
+
+    def test_config_json_created_owner_only(self, tmp_path: Path) -> None:
+        import os
+
+        if os.name == "nt":
+            pytest.skip("POSIX permission semantics only")
+
+        from aems_agent.config import AgentConfig, save_config
+
+        save_config(AgentConfig(), tmp_path)
+        mode = (tmp_path / "config.json").stat().st_mode & 0o777
+        assert mode == 0o600

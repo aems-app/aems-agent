@@ -131,6 +131,28 @@ class AgentConfig(BaseModel):
         return v
 
 
+def _write_owner_only_text(path: Path, content: str) -> None:
+    """Write *content* to *path*, created owner-only (0600) from the start.
+
+    Avoids the write-then-chmod window where the file is briefly readable
+    by other local users. On Windows the POSIX mode is ignored and the file
+    inherits ACLs from its parent directory, matching previous behaviour.
+
+    ``O_BINARY`` (0 on POSIX) keeps the CRT from doing its own newline
+    translation on Windows; ``newline=""`` keeps the text layer from doing
+    it too, so the bytes written are exactly ``content`` on every platform.
+    """
+    flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC | getattr(os, "O_BINARY", 0)
+    fd = os.open(str(path), flags, 0o600)
+    try:
+        handle = os.fdopen(fd, "w", encoding="utf-8", newline="")
+    except BaseException:
+        os.close(fd)  # fdopen didn't take ownership of the fd; close it ourselves
+        raise
+    with handle:
+        handle.write(content)
+
+
 def load_config(config_dir: Optional[Path] = None) -> AgentConfig:
     """
     Load agent configuration from disk.
@@ -168,11 +190,13 @@ def save_config(config: AgentConfig, config_dir: Optional[Path] = None) -> None:
 
     config_dir.mkdir(parents=True, exist_ok=True)
     config_file = config_dir / "config.json"
-    config_file.write_text(
+    _write_owner_only_text(
+        config_file,
         json.dumps(config.model_dump(mode="json"), indent=2),
-        encoding="utf-8",
     )
     try:
+        # Tighten permissions on files created by older agent versions; the
+        # O_CREAT mode above only applies when the file is first created.
         config_file.chmod(0o600)
     except OSError:
         pass  # Best-effort; Windows ACLs handled differently
@@ -197,16 +221,17 @@ def ensure_auth_token(config_dir: Optional[Path] = None) -> str:
     if token_file.exists():
         token = token_file.read_text(encoding="utf-8").strip()
         if token:
+            try:
+                # Tighten permissions on tokens created by older versions.
+                token_file.chmod(0o600)
+            except OSError:
+                pass  # Best-effort; Windows ACLs handled differently
             return token
 
     token = secrets.token_urlsafe(32)
-    token_file.write_text(token, encoding="utf-8")
-
-    # Restrict file permissions (owner-only on Unix)
-    try:
-        token_file.chmod(0o600)
-    except OSError:
-        pass  # Best-effort; Windows ACLs handled differently
+    # Created owner-only (0600) atomically — never world-readable, even
+    # briefly, on multi-user machines.
+    _write_owner_only_text(token_file, token)
 
     return token
 

@@ -49,3 +49,8 @@ config/
 graphify-out/
 src/aems_agent/_version.txt
 packaging/icon.ico
+# Generated fresh by packaging/build.py on each Linux build
+packaging/linux/aems-agent.desktop
+packaging/linux/aems-agent.service
+packaging/linux/install.sh
+packaging/aems-agent.icns

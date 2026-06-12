@@ -116,7 +116,11 @@ def _verify_token(authorization: Optional[str] = Header(default=None)) -> str:
         raise HTTPException(status_code=401, detail="Invalid authorization format")
 
     token = parts[1].strip()
-    if not _auth_token or not secrets.compare_digest(token, _auth_token):
+    # Compare as bytes: secrets.compare_digest raises TypeError on non-ASCII
+    # str input, which would surface as a 500 instead of a clean 403.
+    if not _auth_token or not secrets.compare_digest(
+        token.encode("utf-8"), _auth_token.encode("utf-8")
+    ):
         raise HTTPException(status_code=403, detail="Invalid token")
 
     return token
@@ -142,12 +146,43 @@ def _get_storage_path() -> Path:
     return path
 
 
+# Windows reserved device names (CON, PRN, AUX, NUL, COM1-9, LPT1-9).
+# Creating directories with these names fails or misbehaves on Windows even
+# when the agent itself runs elsewhere — the storage folder may live on a
+# Windows share or synced drive — so reject them on every platform.
+_WINDOWS_RESERVED_NAMES = frozenset(
+    {"con", "prn", "aux", "nul"}
+    | {f"com{i}" for i in range(1, 10)}
+    | {f"lpt{i}" for i in range(1, 10)}
+)
+_MAX_SEGMENT_LENGTH = 128
+
+
 def _validate_path_segment(value: str, name: str) -> str:
     """Validate a path segment contains only safe characters."""
     if not value or not re.match(r"^[a-zA-Z0-9_\-]+$", value):
         raise HTTPException(
             status_code=400,
             detail=f"Invalid {name}: must contain only alphanumeric, dash, or underscore",
+        )
+    if len(value) > _MAX_SEGMENT_LENGTH:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid {name}: exceeds {_MAX_SEGMENT_LENGTH} characters",
+        )
+    if value.startswith("_"):
+        # Leading underscore is reserved for agent-internal directories
+        # (_data, _cache). Allowing it would let API calls collide with the
+        # internal namespace — e.g. DELETE /files/_data would remove every
+        # stored grading result across all assignments.
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid {name}: leading underscore is reserved",
+        )
+    if value.lower() in _WINDOWS_RESERVED_NAMES:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid {name}: reserved name",
         )
     return value
 
@@ -502,15 +537,9 @@ async def store_submission(
     storage_path = _get_storage_path()
     sub_dir = _submission_dir(storage_path, assignment_id, submission_id)
 
-    data = await request.body()
+    data = await _read_pdf_upload_body(request)
     if not data:
         raise HTTPException(status_code=400, detail="Empty request body")
-
-    if len(data) > _MAX_UPLOAD_BYTES:
-        raise HTTPException(
-            status_code=413,
-            detail=f"File too large (max {_MAX_UPLOAD_BYTES // (1024 * 1024)} MB)",
-        )
 
     # Validate PDF magic bytes
     if not data[:5] == b"%PDF-":
@@ -623,15 +652,9 @@ async def store_annotated(
     storage_path = _get_storage_path()
     sub_dir = _submission_dir(storage_path, assignment_id, submission_id)
 
-    data = await request.body()
+    data = await _read_pdf_upload_body(request)
     if not data:
         raise HTTPException(status_code=400, detail="Empty request body")
-
-    if len(data) > _MAX_UPLOAD_BYTES:
-        raise HTTPException(
-            status_code=413,
-            detail=f"File too large (max {_MAX_UPLOAD_BYTES // (1024 * 1024)} MB)",
-        )
 
     if not data[:5] == b"%PDF-":
         raise HTTPException(status_code=400, detail="Not a valid PDF")
@@ -705,16 +728,22 @@ def _write_json_atomic(target: Path, content: bytes) -> Dict[str, Any]:
     return {"receipt": sha, "written_at": now}
 
 
-async def _read_limited_body(request: Request, max_bytes: int) -> bytes:
-    """Read a request body up to *max_bytes* and raise 413 if exceeded."""
+async def _read_limited_body(
+    request: Request,
+    max_bytes: int,
+    too_large_detail: Optional[str] = None,
+) -> bytes:
+    """Read a request body up to *max_bytes* and raise 413 if exceeded.
+
+    Streams the body so an oversized request is rejected as soon as the cap
+    is crossed, instead of buffering the whole payload in memory first.
+    """
+    detail = too_large_detail or f"JSON body too large (max {max_bytes // (1024 * 1024)} MiB)"
     content_length = request.headers.get("content-length")
     if content_length:
         try:
             if int(content_length) > max_bytes:
-                raise HTTPException(
-                    status_code=413,
-                    detail=f"JSON body too large (max {max_bytes // (1024 * 1024)} MiB)",
-                )
+                raise HTTPException(status_code=413, detail=detail)
         except ValueError as exc:
             raise HTTPException(status_code=400, detail="Invalid Content-Length header") from exc
 
@@ -723,12 +752,18 @@ async def _read_limited_body(request: Request, max_bytes: int) -> bytes:
     async for chunk in request.stream():
         total += len(chunk)
         if total > max_bytes:
-            raise HTTPException(
-                status_code=413,
-                detail=f"JSON body too large (max {max_bytes // (1024 * 1024)} MiB)",
-            )
+            raise HTTPException(status_code=413, detail=detail)
         chunks.append(chunk)
     return b"".join(chunks)
+
+
+async def _read_pdf_upload_body(request: Request) -> bytes:
+    """Read a PDF upload body with the streaming size cap applied."""
+    return await _read_limited_body(
+        request,
+        _MAX_UPLOAD_BYTES,
+        too_large_detail=f"File too large (max {_MAX_UPLOAD_BYTES // (1024 * 1024)} MB)",
+    )
 
 
 async def _read_json_body(request: Request) -> Any:
@@ -834,13 +869,19 @@ def _maybe_write_pairing_pin_to_file(
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
         tmp = path.with_suffix(path.suffix + ".tmp")
-        tmp.write_text(payload + "\n", encoding="utf-8")
+        # Create owner-only (0600) from the start so the PIN is never
+        # world-readable, even briefly. Windows ignores the POSIX mode and
+        # inherits ACLs from the parent directory instead. O_BINARY (0 on
+        # POSIX) + newline="" keeps the written bytes identical cross-platform.
+        flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC | getattr(os, "O_BINARY", 0)
+        fd = os.open(str(tmp), flags, 0o600)
         try:
-            os.chmod(tmp, 0o600)
-        except OSError:
-            # Windows or restricted filesystems may not honour chmod; the
-            # rename still succeeds and the file inherits ACLs from its parent.
-            pass
+            handle = os.fdopen(fd, "w", encoding="utf-8", newline="")
+        except BaseException:
+            os.close(fd)  # fdopen didn't take ownership of the fd; close it ourselves
+            raise
+        with handle:
+            handle.write(payload + "\n")
         os.replace(tmp, path)
     except OSError as exc:
         logger.warning("Failed to write pairing PIN to %s: %s", path, exc)
@@ -998,6 +1039,8 @@ async def create_grading_bundle(
     sid = _validate_path_segment(sid, "submission_id")
 
     body = await _read_json_body(request)
+    if not isinstance(body, dict):
+        raise HTTPException(status_code=400, detail="Request body must be a JSON object")
     strategy = body.get("strategy", "text_only")
     dpi = body.get("dpi", 150)
     max_pages = body.get("max_pages")
@@ -1006,6 +1049,20 @@ async def create_grading_bundle(
     # Validate strategy
     if strategy not in ("text_only", "multimodal", "smart"):
         raise HTTPException(status_code=400, detail=f"Invalid strategy: {strategy}")
+
+    # Validate render parameters. An unbounded dpi would let a caller render
+    # arbitrarily large pixmaps (memory exhaustion); bool is excluded because
+    # it is an int subclass.
+    if not isinstance(dpi, int) or isinstance(dpi, bool) or not (30 <= dpi <= 600):
+        raise HTTPException(
+            status_code=400, detail="Invalid dpi: must be an integer between 30 and 600"
+        )
+    if max_pages is not None and (
+        not isinstance(max_pages, int) or isinstance(max_pages, bool) or max_pages < 1
+    ):
+        raise HTTPException(status_code=400, detail="Invalid max_pages: must be a positive integer")
+    if not isinstance(force_refresh, bool):
+        raise HTTPException(status_code=400, detail="Invalid force_refresh: must be a boolean")
 
     pdf_path = validate_path_within_storage(storage_path, aid, sid, "submission.pdf")
     if not pdf_path.exists():

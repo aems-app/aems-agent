@@ -27,7 +27,12 @@ def test_copy_text_to_clipboard_uses_text_mode_on_windows(
     monkeypatch.setattr(subprocess, "run", fake_run)
 
     assert clipboard.copy_text_to_clipboard("123456") is True
-    assert captured["argv"] == ["clip"]
+    argv = captured["argv"]
+    assert isinstance(argv, list) and len(argv) == 1
+    # Absolute System32 path, not a bare name (CWD-relative resolution on
+    # Windows would allow binary planting).
+    assert str(argv[0]).lower().endswith("clip.exe")
+    assert "system32" in str(argv[0]).lower()
     assert captured["input"] == "123456"
     assert captured["text"] is True
     assert captured["encoding"] is None

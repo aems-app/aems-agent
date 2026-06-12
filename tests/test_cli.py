@@ -137,3 +137,65 @@ def test_run_uses_main_thread_tray_helper_on_darwin(
 
     assert called.get("main_thread") == (tmp_path, fake_app, "127.0.0.1", 61234)
     assert "threaded_tray" not in called
+
+
+class TestPreflightPortCheck:
+    """_preflight_port_or_die: free port passes; busy port dies informatively."""
+
+    def test_free_port_passes(self) -> None:
+        # Port 0 binds an ephemeral free port on every platform.
+        cli_module._preflight_port_or_die("127.0.0.1", 0)
+
+    def test_busy_port_non_aems_exits_1(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        import socket
+
+        shown: list[str] = []
+        monkeypatch.setattr(cli_module, "_show_startup_error_dialog", shown.append)
+
+        squatter = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        squatter.bind(("127.0.0.1", 0))
+        squatter.listen(1)
+        port = squatter.getsockname()[1]
+        try:
+            with pytest.raises(SystemExit) as excinfo:
+                cli_module._preflight_port_or_die("127.0.0.1", port)
+        finally:
+            squatter.close()
+
+        assert excinfo.value.code == 1
+        assert shown and "in use" in shown[0]
+
+    def test_busy_port_aems_agent_exits_0(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """An already-running agent is detected via the unauthenticated /status."""
+        import http.server
+        import json
+        import threading
+
+        shown: list[str] = []
+        monkeypatch.setattr(cli_module, "_show_startup_error_dialog", shown.append)
+
+        class _StatusHandler(http.server.BaseHTTPRequestHandler):
+            def do_GET(self) -> None:  # noqa: N802 - http.server API
+                body = json.dumps({"status": "ok", "service": "aems-agent"}).encode()
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+
+            def log_message(self, *args: object) -> None:
+                pass
+
+        server = http.server.HTTPServer(("127.0.0.1", 0), _StatusHandler)
+        port = server.server_address[1]
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            with pytest.raises(SystemExit) as excinfo:
+                cli_module._preflight_port_or_die("127.0.0.1", port)
+        finally:
+            server.shutdown()
+            server.server_close()
+
+        assert excinfo.value.code == 0
+        assert shown and "already running" in shown[0]

@@ -4,7 +4,7 @@ import hashlib
 import time
 from pathlib import Path
 from typing import Any
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
@@ -25,6 +25,48 @@ def _make_manifest(**overrides: Any) -> dict[str, Any]:
     }
     manifest.update(overrides)
     return manifest
+
+
+def _stream_client(
+    content: bytes = b"",
+    *,
+    stream_error: Exception | None = None,
+    status_error: Exception | None = None,
+) -> AsyncMock:
+    """Build a mock httpx client whose ``.stream()`` yields ``content``.
+
+    Mirrors ``httpx.AsyncClient.stream`` (an async context manager exposing
+    ``aiter_bytes()``), so tests exercise the streaming/size-cap download path.
+    ``.stream`` is a ``MagicMock`` so call args (the request URL) are recorded.
+    Pass ``stream_error`` to raise on request, ``status_error`` to raise from
+    ``raise_for_status()``.
+    """
+
+    class _Resp:
+        def raise_for_status(self) -> None:
+            if status_error is not None:
+                raise status_error
+
+        async def aiter_bytes(self) -> Any:
+            # Yield in two chunks so the capped-accumulation loop is exercised.
+            if content:
+                mid = max(1, len(content) // 2)
+                yield content[:mid]
+                if content[mid:]:
+                    yield content[mid:]
+
+    class _Ctx:
+        async def __aenter__(self) -> Any:
+            if stream_error is not None:
+                raise stream_error
+            return _Resp()
+
+        async def __aexit__(self, *exc: Any) -> bool:
+            return False
+
+    client = AsyncMock()
+    client.stream = MagicMock(side_effect=lambda *a, **k: _Ctx())
+    return client
 
 
 # ---------------------------------------------------------------------------
@@ -174,8 +216,7 @@ class TestDownloadSubmissions:
 
         from aems_agent.canvas_download import download_submissions
 
-        mock_client = AsyncMock()
-        mock_client.get.side_effect = httpx.ConnectError("connection refused")
+        mock_client = _stream_client(stream_error=httpx.ConnectError("connection refused"))
 
         manifest = _make_manifest()
         results = await download_submissions(
@@ -192,12 +233,7 @@ class TestDownloadSubmissions:
         from aems_agent.canvas_download import download_submissions
 
         pdf_content = b"%PDF-1.4 test content for download"
-        mock_response = AsyncMock()
-        mock_response.content = pdf_content
-        mock_response.raise_for_status = lambda: None
-
-        mock_client = AsyncMock()
-        mock_client.get.return_value = mock_response
+        mock_client = _stream_client(pdf_content)
 
         manifest = _make_manifest()
         results = await download_submissions(
@@ -218,12 +254,7 @@ class TestDownloadSubmissions:
         """Non-PDF content is rejected."""
         from aems_agent.canvas_download import download_submissions
 
-        mock_response = AsyncMock()
-        mock_response.content = b"<html>not a pdf</html>"
-        mock_response.raise_for_status = lambda: None
-
-        mock_client = AsyncMock()
-        mock_client.get.return_value = mock_response
+        mock_client = _stream_client(b"<html>not a pdf</html>")
 
         manifest = _make_manifest()
         results = await download_submissions(
@@ -240,12 +271,7 @@ class TestDownloadSubmissions:
         from aems_agent.canvas_download import download_submissions
 
         pdf_content = b"%PDF-1.4 test"
-        mock_response = AsyncMock()
-        mock_response.content = pdf_content
-        mock_response.raise_for_status = lambda: None
-
-        mock_client = AsyncMock()
-        mock_client.get.return_value = mock_response
+        mock_client = _stream_client(pdf_content)
 
         manifest = _make_manifest(
             submissions=[
@@ -293,12 +319,7 @@ class TestDownloadSubmissions:
         existing.write_bytes(b"%PDF-old")
 
         new_content = b"%PDF-1.4 new content is longer"
-        mock_response = AsyncMock()
-        mock_response.content = new_content
-        mock_response.raise_for_status = lambda: None
-
-        mock_client = AsyncMock()
-        mock_client.get.return_value = mock_response
+        mock_client = _stream_client(new_content)
 
         manifest = _make_manifest()
         manifest["submissions"][0]["expected_size"] = len(new_content)
@@ -317,12 +338,7 @@ class TestDownloadSubmissions:
         from aems_agent.canvas_download import SubmissionResult, download_submissions
 
         pdf_content = b"%PDF-1.4 first"
-        mock_response = AsyncMock()
-        mock_response.content = pdf_content
-        mock_response.raise_for_status = lambda: None
-
-        mock_client = AsyncMock()
-        mock_client.get.return_value = mock_response
+        mock_client = _stream_client(pdf_content)
 
         manifest = _make_manifest(
             submissions=[
@@ -353,12 +369,7 @@ class TestDownloadSubmissions:
         from aems_agent import canvas_download
 
         pdf_content = b"%PDF-1.4 temp cleanup"
-        mock_response = AsyncMock()
-        mock_response.content = pdf_content
-        mock_response.raise_for_status = lambda: None
-
-        mock_client = AsyncMock()
-        mock_client.get.return_value = mock_response
+        mock_client = _stream_client(pdf_content)
 
         def fail_replace(_src: str, _dst: str) -> None:
             raise OSError("replace failed")
@@ -411,14 +422,7 @@ class TestDownloadJob:
         )
 
         pdf_content = b"%PDF-1.4 test"
-        mock_response = AsyncMock()
-        mock_response.content = pdf_content
-        mock_response.raise_for_status = lambda: None
-
-        mock_client = AsyncMock()
-        mock_client.get.return_value = mock_response
-        mock_client.__aenter__ = AsyncMock(return_value=mock_client)
-        mock_client.__aexit__ = AsyncMock(return_value=False)
+        mock_client = _stream_client(pdf_content)
 
         manifest = _make_manifest()
         job_id = create_download_job(manifest)
@@ -445,21 +449,37 @@ class TestDownloadJob:
         )
 
         pdf_content = b"%PDF-1.4 progress"
-        mock_response = AsyncMock()
-        mock_response.content = pdf_content
-        mock_response.raise_for_status = lambda: None
 
         class SlowClient:
+            """Streaming client whose first download is slow, to observe progress."""
+
             def __init__(self) -> None:
                 self.calls = 0
 
-            async def get(self, *args: Any, **kwargs: Any) -> Any:
-                import asyncio
-
+            def stream(self, *args: Any, **kwargs: Any) -> Any:
                 self.calls += 1
-                if self.calls == 1:
-                    await asyncio.sleep(0.05)
-                return mock_response
+                slow = self.calls == 1
+
+                class _Ctx:
+                    async def __aenter__(self) -> Any:
+                        if slow:
+                            import asyncio
+
+                            await asyncio.sleep(0.05)
+
+                        class _Resp:
+                            def raise_for_status(self) -> None:
+                                return None
+
+                            async def aiter_bytes(self) -> Any:
+                                yield pdf_content
+
+                        return _Resp()
+
+                    async def __aexit__(self, *exc: Any) -> bool:
+                        return False
+
+                return _Ctx()
 
         manifest = _make_manifest(
             submissions=[
@@ -509,3 +529,118 @@ class TestDownloadJob:
 
         # Should not exceed MAX_JOBS
         assert len(_download_jobs) <= 100
+
+
+# ---------------------------------------------------------------------------
+# Download URL pinning + size cap (v0.4.18)
+# ---------------------------------------------------------------------------
+
+
+class TestDownloadUrlPinning:
+    """download_url must never route the Canvas token off the validated host."""
+
+    @pytest.mark.asyncio
+    async def test_full_url_download_url_marked_failed(self, tmp_path: Path) -> None:
+        """An absolute URL smuggled into download_url must not be fetched."""
+        from aems_agent.canvas_download import download_submissions
+
+        manifest = _make_manifest()
+        manifest["submissions"][0]["download_url"] = "https://evil.example.com/exfil"
+
+        mock_client = AsyncMock()
+        results = await download_submissions(
+            manifest=manifest,
+            storage_path=tmp_path,
+            http_client=mock_client,
+        )
+
+        assert results[0].status == "failed"
+        assert "download_url" in results[0].error
+        mock_client.stream.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_userinfo_trick_download_url_marked_failed(self, tmp_path: Path) -> None:
+        """`@evil.com/...` would turn the Canvas host into URL userinfo."""
+        from aems_agent.canvas_download import download_submissions
+
+        manifest = _make_manifest()
+        manifest["submissions"][0]["download_url"] = "@evil.example.com/exfil"
+
+        mock_client = AsyncMock()
+        results = await download_submissions(
+            manifest=manifest,
+            storage_path=tmp_path,
+            http_client=mock_client,
+        )
+
+        assert results[0].status == "failed"
+        mock_client.stream.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_missing_download_url_marked_failed(self, tmp_path: Path) -> None:
+        from aems_agent.canvas_download import download_submissions
+
+        manifest = _make_manifest()
+        del manifest["submissions"][0]["download_url"]
+
+        mock_client = AsyncMock()
+        results = await download_submissions(
+            manifest=manifest,
+            storage_path=tmp_path,
+            http_client=mock_client,
+        )
+
+        assert results[0].status == "failed"
+        mock_client.stream.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_valid_path_download_url_still_fetched(self, tmp_path: Path) -> None:
+        from aems_agent.canvas_download import download_submissions
+
+        pdf_content = b"%PDF-1.4 pinned host ok"
+        mock_client = _stream_client(pdf_content)
+
+        manifest = _make_manifest()
+        results = await download_submissions(
+            manifest=manifest,
+            storage_path=tmp_path,
+            http_client=mock_client,
+        )
+
+        assert results[0].status == "downloaded"
+        # stream("GET", url, ...) — the URL is the second positional argument.
+        called_url = mock_client.stream.call_args[0][1]
+        assert called_url == "https://university.instructure.com/files/569/download"
+
+    def test_build_download_url_rejects_protocol_relative(self) -> None:
+        """A `//host/path` value must not survive validation on a hostile base."""
+        from aems_agent.canvas_download import _build_download_url
+
+        with pytest.raises(ValueError):
+            _build_download_url("https://school.instructure.com", "//evil.example.com/x")
+
+
+class TestDownloadSizeCap:
+    """Oversized Canvas responses are rejected instead of written to disk."""
+
+    @pytest.mark.asyncio
+    async def test_oversized_download_marked_failed(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from aems_agent import canvas_download
+        from aems_agent.canvas_download import download_submissions
+
+        monkeypatch.setattr(canvas_download, "MAX_DOWNLOAD_BYTES", 16)
+
+        mock_client = _stream_client(b"%PDF-" + b"y" * 64)
+
+        manifest = _make_manifest()
+        results = await download_submissions(
+            manifest=manifest,
+            storage_path=tmp_path,
+            http_client=mock_client,
+        )
+
+        assert results[0].status == "failed"
+        assert "size limit" in results[0].error
+        assert not (tmp_path / "100" / "1001" / "submission.pdf").exists()
