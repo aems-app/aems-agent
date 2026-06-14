@@ -2,6 +2,14 @@
 
 All notable changes to `aems-agent` are recorded here. Format follows [Keep a Changelog](https://keepachangelog.com/) and the project uses [SemVer](https://semver.org/).
 
+## 0.4.21 — 2026-06-15
+
+Packaging follow-up. End-user behaviour and the API surface are unchanged.
+
+### Fixed
+
+- **Portable Windows `install.ps1` now registers HKCU autostart**, matching what `aems-agent-setup.exe` (the NSIS installer) writes to `HKCU\Software\Microsoft\Windows\CurrentVersion\Run`. Without this step, users who installed from the raw PyInstaller bundle still had to relaunch the tray manually after every sign-in. The web UI's "Does not auto-start" warning was therefore accurate for them even though it is now hidden on Windows; aligning the two install paths so the warning's absence is truthful for every Windows user, not just those who ran the .exe.
+
 ## 0.4.20 — 2026-06-14
 
 Packaging follow-up. End-user behaviour and the API surface are unchanged.

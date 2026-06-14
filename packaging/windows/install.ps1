@@ -100,6 +100,27 @@ function Sync-InstallDir {
     Copy-Item (Join-Path $From 'aems-agent.exe') (Join-Path $InstallDir 'aems-agent.exe')
 }
 
+function Register-Autostart {
+    # Mirror what packaging/windows/installer.nsi writes to
+    # HKCU\Software\Microsoft\Windows\CurrentVersion\Run so users who install
+    # from the portable bundle get the same auto-relaunch-at-sign-in behaviour
+    # as users who run aems-agent-setup.exe. Without this, the web UI's
+    # "Does not auto-start" warning would still be true for portable-bundle
+    # users even though it is false for everyone who went through the .exe.
+    $runKey = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run'
+    $exe = Join-Path $InstallDir 'aems-agent.exe'
+    $value = '"' + $exe + '" run --tray'
+    try {
+        if (-not (Test-Path $runKey)) {
+            New-Item -Path $runKey -Force | Out-Null
+        }
+        Set-ItemProperty -Path $runKey -Name 'AEMS Agent' -Value $value -Type String
+        Write-Host "Autostart registered: $runKey\AEMS Agent"
+    } catch {
+        Write-Warning "Could not register autostart ($_); the tray will still run now but won't relaunch after sign-out."
+    }
+}
+
 function Start-Tray {
     $exe = Join-Path $InstallDir 'aems-agent.exe'
     Write-Host "Starting $exe run --tray"
@@ -116,6 +137,7 @@ Sync-InstallDir -From $src
 $installedExe = Join-Path $InstallDir 'aems-agent.exe'
 $version = (& $installedExe --version) -replace '^aems-agent\s+',''
 Write-Host "Installed aems-agent $version"
+Register-Autostart
 
 if (-not $NoStart) {
     Start-Tray

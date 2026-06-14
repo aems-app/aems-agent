@@ -47,6 +47,20 @@ def test_install_script_starts_new_tray(script_text: str) -> None:
     assert "--tray" in script_text or "'run','--tray'" in script_text
 
 
+def test_install_script_registers_autostart(script_text: str) -> None:
+    """install.ps1 must mirror what installer.nsi writes to HKCU\\Run.
+
+    Without this, users who installed from the portable bundle would keep
+    needing to relaunch the tray manually after every sign-in, and the
+    settings page's "Does not auto-start" caveat would stay accurate for
+    them even though it is hidden on Windows.
+    """
+    assert "Register-Autostart" in script_text
+    assert "HKCU" in script_text
+    assert "Software\\Microsoft\\Windows\\CurrentVersion\\Run" in script_text
+    assert "AEMS Agent" in script_text
+
+
 def test_install_script_supports_no_start(script_text: str) -> None:
     """`-NoStart` is the documented escape hatch for fully scripted reinstall flows."""
     assert "-NoStart" in script_text
