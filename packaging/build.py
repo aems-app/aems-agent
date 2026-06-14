@@ -91,8 +91,29 @@ def build_pyinstaller() -> Path:
     return output
 
 
+def _ship_windows_install_script(dist_path: Path) -> None:
+    """Copy install.ps1 into the dist tree.
+
+    Ships the fallback installer alongside the portable PyInstaller bundle
+    so users (and devs running ``packaging/build.py`` locally without NSIS)
+    get a kill-then-replace flow that mirrors what
+    ``packaging/windows/installer.nsi`` does for ``aems-agent-setup.exe``.
+    Without this, hand-extracting the bundle and double-clicking
+    aems-agent.exe over a running tray trips
+    ``_preflight_port_or_die``'s "already running" dialog.
+    """
+    src = PACKAGING_DIR / "windows" / "install.ps1"
+    if not src.exists():
+        return
+    dest = dist_path / "install.ps1"
+    shutil.copy2(src, dest)
+    print(f"  Windows install script: {dest}")
+
+
 def build_windows_installer(dist_path: Path) -> Path:
     """Build NSIS installer for Windows."""
+    _ship_windows_install_script(dist_path)
+
     nsi_file = PACKAGING_DIR / "windows" / "installer.nsi"
     if not nsi_file.exists():
         print("  [SKIP] NSIS script not found, skipping Windows installer")

@@ -2,6 +2,14 @@
 
 All notable changes to `aems-agent` are recorded here. Format follows [Keep a Changelog](https://keepachangelog.com/) and the project uses [SemVer](https://semver.org/).
 
+## 0.4.20 — 2026-06-14
+
+Packaging follow-up. End-user behaviour and the API surface are unchanged.
+
+### Fixed
+
+- **Portable Windows bundle now ships a kill-then-replace installer.** Users who download the raw PyInstaller bundle (or developers iterating with `python packaging/build.py`) previously had to hand-kill the tray before copying files; doing the swap with the tray still bound to `127.0.0.1:61234` left the new launch tripping `_preflight_port_or_die`'s "Another AEMS Agent is already running" dialog. `packaging/windows/install.ps1` (also copied into `dist/aems-agent/install.ps1` by the build) stops every `aems-agent` process, waits for the port to actually free via a `TcpListener` bind probe, atomically wipes `_internal/`, swaps `aems-agent.exe`, and starts the tray once. The NSIS installer (`aems-agent-setup.exe`) already had the equivalent flow; this closes the gap for users who never touch the installer.
+
 ## 0.4.19 — 2026-06-12
 
 Follow-up to v0.4.18 acting on a code review of the security-hardening slice. Completes the Canvas download size cap and closes two file-descriptor edge cases. No API surface change.
