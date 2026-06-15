@@ -2,6 +2,14 @@
 
 All notable changes to `aems-agent` are recorded here. Format follows [Keep a Changelog](https://keepachangelog.com/) and the project uses [SemVer](https://semver.org/).
 
+## 0.4.26 — 2026-06-15
+
+Fix release. End-user behaviour and the API surface are unchanged.
+
+### Fixed
+
+- **`/self-update` now tolerates the CI's prefixed-path `sha256sums.txt`.** The release workflow emits lines like `<sha>  artifacts/aems-agent-windows/aems-agent-setup.exe` (because it concatenates artifact directories before hashing), but the v0.4.24 parser compared the full path string against the bare asset filename and rejected every entry as `asset_not_in_manifest`. The parser now compares on basename so prefixed and non-prefixed manifests both verify. Caught when the v0.4.24 → v0.4.25 one-click update tried to spawn but the SHA lookup failed; bridged that specific upgrade by re-uploading `v0.4.25/sha256sums.txt` with basenames only. From v0.4.26 onwards the agent does not depend on the manifest format. New regression tests cover both forms.
+
 ## 0.4.25 — 2026-06-15
 
 Verification release. End-user behaviour and the API surface are unchanged from v0.4.24.

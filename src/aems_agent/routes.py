@@ -429,9 +429,13 @@ def _download_to(url: str, dest: Path, timeout: float = 120.0) -> int:
 def _parse_sums_line(text: str, target_filename: str) -> Optional[str]:
     """Pull the SHA-256 hex for `target_filename` out of a sha256sums.txt file.
 
-    Format per line: ``<64-hex>  filename`` or ``<64-hex> *filename``
-    (the asterisk marks binary mode; both are valid).
+    Accepts both bare filenames (``<64-hex>  setup.exe``) and prefixed paths
+    (``<64-hex>  artifacts/foo/setup.exe``) so we don't have to dictate the
+    CI workflow's exact output format. Compares on the basename. Also
+    accepts the ``*`` binary-mode marker (``<64-hex> *setup.exe``).
     """
+    import posixpath
+
     for raw in text.splitlines():
         line = raw.strip()
         if not line or line.startswith("#"):
@@ -441,7 +445,10 @@ def _parse_sums_line(text: str, target_filename: str) -> Optional[str]:
             continue
         sha = parts[0]
         name = parts[1].lstrip("*")
-        if name == target_filename and len(sha) == 64 and all(c in "0123456789abcdef" for c in sha.lower()):
+        # Compare on basename so prefixed paths
+        # (``artifacts/aems-agent-windows/aems-agent-setup.exe``) match a
+        # bare-filename target.
+        if posixpath.basename(name) == target_filename and len(sha) == 64 and all(c in "0123456789abcdef" for c in sha.lower()):
             return sha.lower()
     return None
 

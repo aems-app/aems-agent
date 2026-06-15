@@ -213,3 +213,21 @@ class TestSumsParser:
         sha = "d" * 64
         text = f"# header comment\n\n{sha}  aems-agent-setup.exe\n"
         assert routes._parse_sums_line(text, "aems-agent-setup.exe") == sha
+
+    def test_accepts_prefixed_path(self) -> None:
+        """The release CI emits paths like ``artifacts/aems-agent-windows/aems-agent-setup.exe``
+        because it concatenates downloaded artifact directories before hashing.
+        The parser compares on basename so the path prefix is harmless."""
+        from aems_agent import routes
+
+        sha = "e" * 64
+        text = f"{sha}  artifacts/aems-agent-windows/aems-agent-setup.exe\n"
+        assert routes._parse_sums_line(text, "aems-agent-setup.exe") == sha
+
+    def test_accepts_prefixed_path_with_binary_star(self) -> None:
+        """Combine both quirks: prefix + binary-mode asterisk."""
+        from aems_agent import routes
+
+        sha = "f" * 64
+        text = f"{sha} *artifacts/aems-agent-macos/AEMS-Agent.dmg\n"
+        assert routes._parse_sums_line(text, "AEMS-Agent.dmg") == sha
