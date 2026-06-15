@@ -2,6 +2,14 @@
 
 All notable changes to `aems-agent` are recorded here. Format follows [Keep a Changelog](https://keepachangelog.com/) and the project uses [SemVer](https://semver.org/).
 
+## 0.4.32 — 2026-06-15
+
+Lint-only release. v0.4.31's CI ran with the v0.4.30 commit body (release-tag race) so the mypy follow-up did not land in the v0.4.31 artifacts. v0.4.32 ships the same code with the type annotation tightened.
+
+### Fixed
+
+- **`_fetch_text` mypy `no-any-return`.** `urlopen(...).read().decode("utf-8")` is typed as `Any` in `urllib.request`'s stubs; pinned an intermediate `body: str` so the return type matches the declared `str`. Catches a future change that accidentally returns bytes or None too.
+
 ## 0.4.31 — 2026-06-15
 
 Fix release. v0.4.30 had the right code change but two CI follow-ups: ruff E402 on a misplaced logger declaration, and the new SO_REUSEADDR static test matched its own explanatory comment.

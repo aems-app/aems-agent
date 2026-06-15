@@ -409,7 +409,8 @@ def _fetch_text(url: str, timeout: float = 30.0) -> str:
 
     req = urllib.request.Request(url, headers={"User-Agent": f"aems-agent/{AGENT_VERSION}"})
     with urllib.request.urlopen(req, timeout=timeout) as resp:  # noqa: S310 — fixed prefix
-        return resp.read().decode("utf-8")
+        body: str = resp.read().decode("utf-8")
+        return body
 
 
 def _download_to(url: str, dest: Path, timeout: float = 120.0) -> int:
