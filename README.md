@@ -126,3 +126,7 @@ AGPL-3.0-or-later. See [LICENSE](LICENSE).
 - Source: [https://github.com/aems-app/aems-agent](https://github.com/aems-app/aems-agent)
 - Issues: [https://github.com/aems-app/aems-agent/issues](https://github.com/aems-app/aems-agent/issues)
 - Annotation engine: [aems-pdf-annotator](https://github.com/aems-app/aems-pdf-annotator)
+
+## Maintainers
+
+- Windows release signing setup: [docs/windows-code-signing.md](docs/windows-code-signing.md)

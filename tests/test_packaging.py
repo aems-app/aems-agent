@@ -5,6 +5,7 @@ from __future__ import annotations
 import importlib
 import sys
 from pathlib import Path
+import xml.etree.ElementTree as ET
 
 import pytest
 
@@ -34,6 +35,99 @@ def test_release_workflow_builds_python_dist_before_downloading_binary_artifacts
     assert workflow.index("name: Build wheel and sdist") < workflow.index(
         "name: Download all artifacts"
     )
+
+
+def test_release_step_is_idempotent_for_retagged_builds() -> None:
+    """The 'Create or update Release' step must tolerate a pre-existing
+    release for the same tag.
+
+    Real scenario from the v0.4.31 release: the tag was first pushed on
+    the v0.4.30 commit, then re-pushed on the actual v0.4.31 commit.
+    The second build's release step ran ``gh release create`` against
+    a tag that already had a GitHub Release object, the call failed,
+    and the second build's correctly-versioned binaries never replaced
+    the first build's wrong-versioned ones. Pin the idempotency so a
+    well-meaning simplification can't silently reopen that gap.
+    """
+    workflow_path = Path(__file__).resolve().parents[1] / ".github" / "workflows" / "build.yml"
+    workflow = workflow_path.read_text(encoding="utf-8")
+
+    # Strip YAML/shell comment lines so the explanatory block at the top
+    # of the run: heredoc can't false-positive the substring checks.
+    code_lines = [line for line in workflow.splitlines() if not line.lstrip().startswith("#")]
+    code_only = "\n".join(code_lines)
+
+    # The view-probe must exist and be wired as an `if` condition.
+    assert (
+        "if gh release view " in code_only
+    ), "release step must probe for an existing release via `if gh release view`"
+    # The clobber-upload branch must exist.
+    assert (
+        "gh release upload " in code_only and "--clobber" in code_only
+    ), "the 'already exists' branch must overwrite assets with `gh release upload ... --clobber`"
+    # The create branch must still exist for the first-time case.
+    assert (
+        "gh release create " in code_only
+    ), "the 'first-time' branch must still call `gh release create`"
+    # The view-probe must precede both create and upload calls.
+    view_idx = code_only.index("if gh release view ")
+    create_idx = code_only.index("gh release create ")
+    upload_idx = code_only.index("gh release upload ")
+    assert view_idx < create_idx, "`if gh release view` must gate `gh release create`"
+    assert view_idx < upload_idx, "`if gh release view` must gate `gh release upload`"
+
+
+def test_windows_workflow_prefers_signpath_over_legacy_pfx_signing() -> None:
+    """Public OSS releases should use SignPath before the legacy PFX fallback.
+
+    New public code-signing certificates are no longer delivered as
+    exportable PFX blobs for GitHub-hosted CI. The modern path for this
+    AGPL public repository is SignPath Foundation / SignPath.io, with the
+    old WIN_CODESIGN_CERT_* inputs kept only as a compatibility fallback
+    for pre-2023 or otherwise exportable private certificates.
+    """
+    workflow_path = Path(__file__).resolve().parents[1] / ".github" / "workflows" / "build.yml"
+    workflow = workflow_path.read_text(encoding="utf-8")
+
+    assert "SIGNPATH_API_TOKEN" in workflow
+    assert "SIGNPATH_ORGANIZATION_ID" in workflow
+    assert "Resolve Windows signing method" in workflow
+    assert "Upload unsigned Windows installer for SignPath" in workflow
+    assert "Submit Windows signing request (SignPath)" in workflow
+    assert "Sign Windows installer (Authenticode legacy PFX fallback)" in workflow
+
+    resolve_idx = workflow.index("Resolve Windows signing method")
+    signpath_upload_idx = workflow.index("Upload unsigned Windows installer for SignPath")
+    signpath_submit_idx = workflow.index("Submit Windows signing request (SignPath)")
+    legacy_pfx_idx = workflow.index("Sign Windows installer (Authenticode legacy PFX fallback)")
+
+    assert resolve_idx < signpath_upload_idx < signpath_submit_idx < legacy_pfx_idx
+
+
+def test_signpath_artifact_configuration_signs_the_windows_installer() -> None:
+    """SignPath config must match the uploaded Windows installer artifact.
+
+    actions/upload-artifact wraps the installer in a zip archive on the
+    GitHub server, so the SignPath artifact configuration must declare a
+    zip root and then target the root-level `aems-agent-setup.exe` file
+    for Authenticode signing.
+    """
+    cfg_path = (
+        Path(__file__).resolve().parents[1]
+        / ".signpath"
+        / "artifact-configurations"
+        / "windows-installer.xml"
+    )
+    xml_text = cfg_path.read_text(encoding="utf-8")
+    root = ET.fromstring(xml_text)
+    ns = {"sp": "http://signpath.io/artifact-configuration/v1"}
+
+    zip_file = root.find("sp:zip-file", ns)
+    assert zip_file is not None
+    pe_file = zip_file.find("sp:pe-file", ns)
+    assert pe_file is not None
+    assert pe_file.get("path") == "aems-agent-setup.exe"
+    assert pe_file.find("sp:authenticode-sign", ns) is not None
 
 
 def test_workflow_relies_on_pyinstaller_signing_when_developer_id_absent() -> None:

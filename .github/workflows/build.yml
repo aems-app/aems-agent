@@ -16,12 +16,17 @@ on:
 # cosign keyless signing). Build jobs run third-party tooling over the
 # tree and should not hold a write-capable token.
 permissions:
+  actions: read
   contents: read
 
 jobs:
   build-windows:
     runs-on: windows-latest
     env:
+      SIGNPATH_API_TOKEN: ${{ secrets.SIGNPATH_API_TOKEN }}
+      SIGNPATH_ORGANIZATION_ID: ${{ vars.SIGNPATH_ORGANIZATION_ID }}
+      SIGNPATH_PROJECT_SLUG: aems-agent
+      SIGNPATH_ARTIFACT_CONFIGURATION_SLUG: windows-installer
       WIN_CODESIGN_CERT_PFX_BASE64: ${{ secrets.WIN_CODESIGN_CERT_PFX_BASE64 }}
       WIN_CODESIGN_CERT_PASSWORD: ${{ secrets.WIN_CODESIGN_CERT_PASSWORD }}
     steps:
@@ -55,19 +60,57 @@ jobs:
             & "C:\Program Files (x86)\NSIS\makensis.exe" /DDIST_DIR=dist\aems-agent /DOUTPUT_DIR=dist packaging\windows\installer.nsi
           }
 
-      - name: Check Windows signing credentials
-        id: win_sign_check
+      - name: Resolve Windows signing method
+        id: win_sign
         run: |
-          if ($env:WIN_CODESIGN_CERT_PFX_BASE64 -and $env:WIN_CODESIGN_CERT_PASSWORD) {
-            echo "available=true" >> $env:GITHUB_OUTPUT
-            Write-Host "Code signing credentials found, will sign installer."
+          if ($env:SIGNPATH_API_TOKEN -and $env:SIGNPATH_ORGANIZATION_ID) {
+            "method=signpath" >> $env:GITHUB_OUTPUT
+            if ($env:GITHUB_REF -like 'refs/tags/v*') {
+              "policy-slug=release-signing" >> $env:GITHUB_OUTPUT
+            } else {
+              "policy-slug=test-signing" >> $env:GITHUB_OUTPUT
+            }
+            Write-Host "SignPath configuration found, will sign installer via SignPath."
+          } elseif ($env:WIN_CODESIGN_CERT_PFX_BASE64 -and $env:WIN_CODESIGN_CERT_PASSWORD) {
+            "method=legacy-pfx" >> $env:GITHUB_OUTPUT
+            Write-Host "::warning::Using legacy exportable PFX signing credentials. New public code-signing certificates should use SignPath or another HSM-backed flow instead."
           } else {
-            echo "available=false" >> $env:GITHUB_OUTPUT
-            Write-Host "::warning::Code signing credentials not configured. Installer will be unsigned."
+            "method=unsigned" >> $env:GITHUB_OUTPUT
+            Write-Host "::warning::No Windows signing configuration found. Installer will be unsigned."
           }
 
-      - name: Sign Windows installer (Authenticode)
-        if: steps.win_sign_check.outputs.available == 'true'
+      - name: Upload unsigned Windows installer for SignPath
+        if: steps.win_sign.outputs.method == 'signpath'
+        id: upload_unsigned_windows_installer
+        uses: actions/upload-artifact@v4
+        with:
+          name: aems-agent-windows-unsigned
+          path: dist/aems-agent-setup.exe
+
+      - name: Submit Windows signing request (SignPath)
+        if: steps.win_sign.outputs.method == 'signpath'
+        uses: signpath/github-action-submit-signing-request@v2
+        with:
+          api-token: '${{ secrets.SIGNPATH_API_TOKEN }}'
+          organization-id: '${{ vars.SIGNPATH_ORGANIZATION_ID }}'
+          project-slug: '${{ env.SIGNPATH_PROJECT_SLUG }}'
+          signing-policy-slug: '${{ steps.win_sign.outputs.policy-slug }}'
+          artifact-configuration-slug: '${{ env.SIGNPATH_ARTIFACT_CONFIGURATION_SLUG }}'
+          github-artifact-id: '${{ steps.upload_unsigned_windows_installer.outputs.artifact-id }}'
+          wait-for-completion: true
+          output-artifact-directory: dist/signpath-signed
+
+      - name: Overlay SignPath-signed installer
+        if: steps.win_sign.outputs.method == 'signpath'
+        run: |
+          $signed = Get-ChildItem -Path dist\signpath-signed -Recurse -Filter aems-agent-setup.exe | Select-Object -First 1
+          if (-not $signed) {
+            throw "SignPath output did not contain aems-agent-setup.exe"
+          }
+          Copy-Item $signed.FullName dist\aems-agent-setup.exe -Force
+
+      - name: Sign Windows installer (Authenticode legacy PFX fallback)
+        if: steps.win_sign.outputs.method == 'legacy-pfx'
         run: |
           $pfxPath = Join-Path $env:RUNNER_TEMP "codesign.pfx"
           [IO.File]::WriteAllBytes($pfxPath, [Convert]::FromBase64String($env:WIN_CODESIGN_CERT_PFX_BASE64))
@@ -75,8 +118,17 @@ jobs:
           & $signtool sign /fd SHA256 /f $pfxPath /p $env:WIN_CODESIGN_CERT_PASSWORD /tr http://timestamp.digicert.com /td SHA256 dist\aems-agent-setup.exe
           & $signtool verify /pa /v dist\aems-agent-setup.exe
 
+      - name: Verify Windows installer signature
+        if: steps.win_sign.outputs.method != 'unsigned'
+        run: |
+          $sig = Get-AuthenticodeSignature dist\aems-agent-setup.exe
+          if ($sig.Status -ne 'Valid') {
+            throw "Authenticode verification failed: $($sig.Status)"
+          }
+          Write-Host "Signed by: $($sig.SignerCertificate.Subject)"
+
       - name: Clean up signing certificate
-        if: always()
+        if: always() && steps.win_sign.outputs.method == 'legacy-pfx'
         run: |
           $pfxPath = Join-Path $env:RUNNER_TEMP "codesign.pfx"
           if (Test-Path $pfxPath) { Remove-Item -Force $pfxPath }
@@ -368,14 +420,37 @@ jobs:
           FILES=$(echo "$FILES" | xargs)
           echo "files=$FILES" >> "$GITHUB_OUTPUT"
 
-      - name: Create Release
+      - name: Create or update Release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           RELEASE_FILES: ${{ steps.signed_assets.outputs.files }}
         run: |
+          # Idempotent release publish. `gh release create` fails with
+          # "release already exists" when the tag has been pushed before
+          # (real scenario: v0.4.31 was first tagged on the v0.4.30
+          # commit, then retagged on the actual v0.4.31 commit — the
+          # second run's release step blew up, leaving the release with
+          # the wrong binary content. The retag itself is the bug we
+          # can't prevent from CI, but failing-shut on the second build
+          # is worse than failing-open: with --clobber the second run
+          # at least overwrites the wrong assets with the correct ones,
+          # matching the intent of the second tag push).
           VERSION="${GITHUB_REF#refs/tags/v}"
-          # shellcheck disable=SC2086
-          gh release create "v${VERSION}" \
-            --title "AEMS Agent v${VERSION}" \
-            --notes "AEMS Local Bridge Agent v${VERSION} - Windows (.exe), macOS (.dmg), Linux (.tar.gz), Python wheel/sdist, plus signed manifest/checksums." \
-            ${RELEASE_FILES}
+          TAG="v${VERSION}"
+          NOTES="AEMS Local Bridge Agent ${TAG} - Windows (.exe), macOS (.dmg), Linux (.tar.gz), Python wheel/sdist, plus signed manifest/checksums."
+
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "Release $TAG already exists; uploading assets with --clobber."
+            gh release edit "$TAG" \
+              --title "AEMS Agent ${TAG}" \
+              --notes "$NOTES"
+            # shellcheck disable=SC2086
+            gh release upload "$TAG" ${RELEASE_FILES} --clobber
+          else
+            echo "Release $TAG does not exist; creating it."
+            # shellcheck disable=SC2086
+            gh release create "$TAG" \
+              --title "AEMS Agent ${TAG}" \
+              --notes "$NOTES" \
+              ${RELEASE_FILES}
+          fi
