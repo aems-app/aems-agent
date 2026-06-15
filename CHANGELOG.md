@@ -2,6 +2,16 @@
 
 All notable changes to `aems-agent` are recorded here. Format follows [Keep a Changelog](https://keepachangelog.com/) and the project uses [SemVer](https://semver.org/).
 
+## 0.4.28 — 2026-06-15
+
+Fix release. Closes the “same-version `/S` reinstall leaves the tray down” regression spotted on review of the v0.4.25 → v0.4.27 one-click flow. The agent now retries the port bind with `SO_REUSEADDR` for ~6 s before deciding the loopback port is occupied; the NSIS installer waits 3 s after `taskkill` and relaunches the tray via `ExecShell` (proper detached spawn) instead of bare `Exec`.
+
+### Fixed
+
+- **`_preflight_port_or_die` no longer false-positives "port in use" right after a `taskkill -F` of the previous agent.** It sets `SO_REUSEADDR` on the probe socket and retries the bind up to ~6 s with backoff before falling through to the `/status` "is it another AEMS Agent?" check. The pre-fix race window let the new tray exit with code 1 immediately on /self-update or silent-NSIS upgrade because the killed agent's socket had not finished its TIME_WAIT yet.
+- **Silent NSIS installer relaunches the tray via `ExecShell`.** The v0.4.23 bare `Exec` form worked for fire-and-forget on most setups, but the detached-spawn parent chain set up by `POST /self-update` (Python `subprocess.Popen(..., DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP)`) left the relaunched tray with the installer's hidden console context on some hardened Windows builds, where `pystray` then failed to create its system tray icon. `ExecShell "open"` goes through `ShellExecute` and always creates a fully independent process.
+- **`Sleep` after `taskkill` raised from 1 s to 3 s.** Belt-and-suspenders alongside the `SO_REUSEADDR` retry: even older v0.4.27- agents being reinstalled from the same `aems-agent-setup.exe` will see the previous loopback socket freed before they probe it. Both relaxations are covered by new regression tests in `tests/test_packaging_windows_installer.py`.
+
 ## 0.4.27 — 2026-06-15
 
 Lint-only release. v0.4.26 shipped the `/self-update` sha256sums.txt fix and signed installer with non-black-formatted source; CI lint went red. v0.4.27 is the same logic re-formatted with `black`; the produced installer is byte-identical for end users (Python tooling reformats imports + line wrap only).

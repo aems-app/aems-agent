@@ -10,6 +10,7 @@ Commands:
     aems-agent config-dir                                        - Show config directory
 """
 
+import logging
 import signal
 import sys
 from importlib.util import find_spec
@@ -17,6 +18,8 @@ import platform
 import threading
 from pathlib import Path
 from typing import Any, Optional
+
+logger = logging.getLogger(__name__)
 
 import typer
 from fastapi import FastAPI
@@ -267,12 +270,20 @@ def _preflight_port_or_die(host: str, port: int) -> None:
     """Verify the agent can bind ``port`` before uvicorn tries.
 
     If the port is in use we attempt to identify whether the squatter is
-    another AEMS Agent (responds to ``GET /health``). If yes, we show a
+    another AEMS Agent (responds to ``GET /status``). If yes, we show a
     "Agent already running" dialog and exit 0 — the user just launched it
     twice, no error needed. If not, we show "Port 61234 is in use by
     something else" and exit 1.
+
+    Retry behaviour: when this process is launched right after an
+    ``aems-agent.exe`` was taskkill'd (silent NSIS upgrade, /self-update
+    flow) the previous socket can still be in TIME_WAIT for a couple of
+    seconds. Retry the bind a few times with backoff *before* deciding
+    the port is occupied so we don't false-positive a "port in use"
+    failure on the legitimate restart path.
     """
     import socket
+    import time
 
     # Resolve the bind family from the host so IPv6 hosts (e.g. ::1) probe
     # correctly instead of always failing the AF_INET bind.
@@ -285,51 +296,70 @@ def _preflight_port_or_die(host: str, port: int) -> None:
     except (socket.gaierror, OSError):
         pass
 
-    sock = socket.socket(family, socket.SOCK_STREAM)
-    try:
-        sock.bind(sockaddr)
-    except OSError:
-        # Port is taken — is it another AEMS Agent?
-        already_aems = False
-        probe_host = host
-        if probe_host in ("0.0.0.0", "::", "[::]"):
-            # Wildcard binds answer on loopback; connecting to the wildcard
-            # address itself fails on Windows.
-            probe_host = "127.0.0.1"
-        if ":" in probe_host and not probe_host.startswith("["):
-            probe_host = f"[{probe_host}]"
+    # Total retry budget ~6 s — comfortably above the typical TIME_WAIT /
+    # taskkill cleanup window without making twice-launched users wait long.
+    backoffs = (0.0, 0.5, 1.0, 1.5, 1.5, 1.5)
+    bind_err: Optional[OSError] = None
+    for sleep in backoffs:
+        if sleep:
+            time.sleep(sleep)
+        sock = socket.socket(family, socket.SOCK_STREAM)
+        # SO_REUSEADDR lets us re-grab a port whose old listener went away
+        # cleanly (TIME_WAIT). On Windows it behaves the way Linux does for
+        # SO_REUSEADDR; we deliberately do NOT set SO_EXCLUSIVEADDRUSE so a
+        # rapid restart cycle is not blocked by the kernel.
         try:
-            import urllib.request
-
-            # /status is the unauthenticated liveness endpoint. /health
-            # requires a bearer token, so probing it always raised and the
-            # "agent already running" dialog could never appear.
-            with urllib.request.urlopen(  # noqa: S310 - localhost only
-                f"http://{probe_host}:{port}/status", timeout=1.0
-            ) as resp:
-                if resp.status == 200:
-                    body = resp.read(512).decode("utf-8", errors="ignore").lower()
-                    if "aems-agent" in body:
-                        already_aems = True
-        except Exception:
+            sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        except OSError:
             pass
+        try:
+            sock.bind(sockaddr)
+            sock.close()
+            return
+        except OSError as e:
+            bind_err = e
+            sock.close()
 
-        msg = (
-            "Another AEMS Agent is already running on this computer.\n\n"
-            "Look for an existing tray icon, or stop the previous agent process\n"
-            "via Task Manager (search 'aems-agent') before launching again."
-            if already_aems
-            else (
-                f"AEMS Agent cannot start: port {port} is already in use by\n"
-                "another program on this computer.\n\n"
-                "Stop the process holding the port, or change the agent's port\n"
-                "via 'aems-agent run --port <other>'."
-            )
+    # Port is *still* taken after the retry budget — is it another AEMS Agent?
+    already_aems = False
+    probe_host = host
+    if probe_host in ("0.0.0.0", "::", "[::]"):
+        # Wildcard binds answer on loopback; connecting to the wildcard
+        # address itself fails on Windows.
+        probe_host = "127.0.0.1"
+    if ":" in probe_host and not probe_host.startswith("["):
+        probe_host = f"[{probe_host}]"
+    try:
+        import urllib.request
+
+        # /status is the unauthenticated liveness endpoint. /health
+        # requires a bearer token, so probing it always raised and the
+        # "agent already running" dialog could never appear.
+        with urllib.request.urlopen(  # noqa: S310 - localhost only
+            f"http://{probe_host}:{port}/status", timeout=1.0
+        ) as resp:
+            if resp.status == 200:
+                body = resp.read(512).decode("utf-8", errors="ignore").lower()
+                if "aems-agent" in body:
+                    already_aems = True
+    except Exception:
+        pass
+
+    msg = (
+        "Another AEMS Agent is already running on this computer.\n\n"
+        "Look for an existing tray icon, or stop the previous agent process\n"
+        "via Task Manager (search 'aems-agent') before launching again."
+        if already_aems
+        else (
+            f"AEMS Agent cannot start: port {port} is already in use by\n"
+            "another program on this computer.\n\n"
+            "Stop the process holding the port, or change the agent's port\n"
+            "via 'aems-agent run --port <other>'."
         )
-        _show_startup_error_dialog(msg)
-        sys.exit(0 if already_aems else 1)
-    finally:
-        sock.close()
+    )
+    logger.error("Preflight failed after retries: %s (last bind error: %s)", msg, bind_err)
+    _show_startup_error_dialog(msg)
+    sys.exit(0 if already_aems else 1)
 
 
 def _show_startup_error_dialog(message: str) -> None:

@@ -52,9 +52,16 @@ Section "Install"
 
     ; Stop any running agent so upgrades can replace aems-agent.exe instead
     ; of failing with "Error opening file for writing".
+    ;
+    ; Wait long enough for Windows to release the loopback port that the
+    ; killed process was bound to — the agent's _preflight_port_or_die uses
+    ; SO_REUSEADDR + retries from v0.4.28 onwards, but older agents (and
+    ; this same exe also serves manual re-install on machines where the
+    ; previous agent was pre-v0.4.28) need the OS-side TIME_WAIT to drain
+    ; first or they will exit 1 from the relaunch step below.
     DetailPrint "Stopping running AEMS Agent instances..."
     nsExec::ExecToLog 'cmd /c taskkill /IM aems-agent.exe /T /F >nul 2>&1'
-    Sleep 1000
+    Sleep 3000
 
     ; Copy all files from PyInstaller dist
     File /r "${DIST_DIR}\*.*"
@@ -104,7 +111,14 @@ Section "Install"
     IfSilent silent_relaunch end_install
 silent_relaunch:
     DetailPrint "Silent install: relaunching AEMS Agent tray..."
-    Exec '"$INSTDIR\aems-agent.exe" run --tray'
+    ; ExecShell goes through ShellExecute and creates a fully independent
+    ; process — important here because we are *about* to return from the
+    ; installer (which was itself spawned detached by the agent's
+    ; POST /self-update). NSIS's bare ``Exec`` works for fire-and-forget
+    ; on most setups but leaves the spawned tray with the installer's
+    ; hidden console context on some hardened Windows builds, where pystray
+    ; then fails to create its system tray icon. ExecShell sidesteps that.
+    ExecShell "open" "$INSTDIR\aems-agent.exe" "run --tray"
 end_install:
 SectionEnd
 
