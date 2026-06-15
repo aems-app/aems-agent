@@ -114,7 +114,7 @@ function Register-Autostart {
         if (-not (Test-Path $runKey)) {
             New-Item -Path $runKey -Force | Out-Null
         }
-        Set-ItemProperty -Path $runKey -Name 'AEMS Agent' -Value $value -Type String
+        New-ItemProperty -Path $runKey -Name 'AEMS Agent' -PropertyType String -Value $value -Force | Out-Null
         Write-Host "Autostart registered: $runKey\AEMS Agent"
     } catch {
         Write-Warning "Could not register autostart ($_); the tray will still run now but won't relaunch after sign-out."
