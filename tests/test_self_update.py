@@ -40,7 +40,9 @@ class TestSelfUpdateValidation:
             r = agent_client.post("/self-update", json={"version": bad}, headers=auth_headers)
             assert r.status_code == 422, f"expected 422 for version={bad!r}, got {r.status_code}"
 
-    def test_accepts_v_prefix(self, agent_client: Any, auth_headers: dict, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_accepts_v_prefix(
+        self, agent_client: Any, auth_headers: dict, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         """The route should normalize a leading 'v' before validation."""
         _skip_if_no_fastapi()
         # Make sums URL fail so we don't actually try to download — we just want
@@ -52,7 +54,9 @@ class TestSelfUpdateValidation:
 
         monkeypatch.setattr(routes, "_fetch_text", _boom)
         # Force a platform we support so we don't get 501 before validation runs
-        monkeypatch.setitem(routes._SELF_UPDATE_ASSET_BY_PLATFORM, sys.platform, "aems-agent-setup.exe")
+        monkeypatch.setitem(
+            routes._SELF_UPDATE_ASSET_BY_PLATFORM, sys.platform, "aems-agent-setup.exe"
+        )
         r = agent_client.post("/self-update", json={"version": "v0.4.24"}, headers=auth_headers)
         assert r.status_code == 502  # got past validation, network shim blocked the fetch
         assert r.json()["detail"]["code"] == "sums_unreachable"
@@ -93,7 +97,9 @@ class TestSelfUpdateShaVerification:
         _skip_if_no_fastapi()
         from aems_agent import routes
 
-        monkeypatch.setitem(routes._SELF_UPDATE_ASSET_BY_PLATFORM, sys.platform, "aems-agent-setup.exe")
+        monkeypatch.setitem(
+            routes._SELF_UPDATE_ASSET_BY_PLATFORM, sys.platform, "aems-agent-setup.exe"
+        )
 
         good_bytes = b"this is the real installer payload"
         bad_bytes = b"this is a tampered payload of different content"
@@ -142,7 +148,9 @@ class TestSelfUpdateHappyPath:
         _skip_if_no_fastapi()
         from aems_agent import routes
 
-        monkeypatch.setitem(routes._SELF_UPDATE_ASSET_BY_PLATFORM, sys.platform, "aems-agent-setup.exe")
+        monkeypatch.setitem(
+            routes._SELF_UPDATE_ASSET_BY_PLATFORM, sys.platform, "aems-agent-setup.exe"
+        )
 
         payload = b"%PDF-1.4 not really an installer but treat as one"
         sha = hashlib.sha256(payload).hexdigest()

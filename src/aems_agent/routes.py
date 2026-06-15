@@ -448,7 +448,11 @@ def _parse_sums_line(text: str, target_filename: str) -> Optional[str]:
         # Compare on basename so prefixed paths
         # (``artifacts/aems-agent-windows/aems-agent-setup.exe``) match a
         # bare-filename target.
-        if posixpath.basename(name) == target_filename and len(sha) == 64 and all(c in "0123456789abcdef" for c in sha.lower()):
+        if (
+            posixpath.basename(name) == target_filename
+            and len(sha) == 64
+            and all(c in "0123456789abcdef" for c in sha.lower())
+        ):
             return sha.lower()
     return None
 
@@ -519,9 +523,7 @@ async def self_update(
     sums_url = f"{base}/sha256sums.txt"
     asset_url = f"{base}/{asset_name}"
 
-    logger.info(
-        "self-update: fetching sha256sums.txt for v%s from %s", version, sums_url
-    )
+    logger.info("self-update: fetching sha256sums.txt for v%s from %s", version, sums_url)
     try:
         sums_text = _fetch_text(sums_url, timeout=30.0)
     except Exception as e:  # noqa: BLE001 — surface as a clean 502

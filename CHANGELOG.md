@@ -2,6 +2,10 @@
 
 All notable changes to `aems-agent` are recorded here. Format follows [Keep a Changelog](https://keepachangelog.com/) and the project uses [SemVer](https://semver.org/).
 
+## 0.4.27 — 2026-06-15
+
+Lint-only release. v0.4.26 shipped the `/self-update` sha256sums.txt fix and signed installer with non-black-formatted source; CI lint went red. v0.4.27 is the same logic re-formatted with `black`; the produced installer is byte-identical for end users (Python tooling reformats imports + line wrap only).
+
 ## 0.4.26 — 2026-06-15
 
 Fix release. End-user behaviour and the API surface are unchanged.
