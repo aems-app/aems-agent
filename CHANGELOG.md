@@ -2,6 +2,18 @@
 
 All notable changes to `aems-agent` are recorded here. Format follows [Keep a Changelog](https://keepachangelog.com/) and the project uses [SemVer](https://semver.org/).
 
+## 0.4.30 — 2026-06-15
+
+Fix release. v0.4.28's preflight added `SO_REUSEADDR` to its probe socket as a "harmless" extra; CI caught that this is actively wrong on Windows.
+
+### Fixed
+
+- **`_preflight_port_or_die` no longer sets `SO_REUSEADDR` on the probe socket.** On Windows, `SO_REUSEADDR` is the ghost-bind flag: if the squatter happens to also have it set (Python's `http.server` and many web frameworks do by default), the kernel happily lets the probe `bind()` succeed against the real listener, so the preflight wrongly concludes the port is free and returns. v0.4.28 shipped CI-green only because the Linux preflight test does not exercise that path; the Windows matrix test `test_busy_port_aems_agent_exits_0` failed loudly. Dropped the `setsockopt` line; the retry-with-backoff loop is what actually closes the kill-then-rebind race after `taskkill /F`. New regression test `test_preflight_does_not_set_so_reuseaddr_on_probe_socket` in `tests/test_cli.py` pins the contract.
+
+### Internal
+
+- `tests/test_packaging_windows_install_script.py` reformatted with `black` (lint-only churn from the v0.4.27 follow-up).
+
 ## 0.4.29 — 2026-06-15
 
 Follow-up to the v0.4.28 same-version reinstall fix after an independent third-party audit. Two concrete bugs closed and one misleading comment corrected.

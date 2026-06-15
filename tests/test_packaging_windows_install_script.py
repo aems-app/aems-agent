@@ -64,7 +64,10 @@ def test_install_script_registers_autostart(script_text: str) -> None:
 def test_install_script_uses_valid_registry_write_cmdlet(script_text: str) -> None:
     """Autostart registration must use a cmdlet/parameter combination PowerShell accepts."""
     assert "New-ItemProperty" in script_text
-    assert "Set-ItemProperty -Path $runKey -Name 'AEMS Agent' -Value $value -Type String" not in script_text
+    assert (
+        "Set-ItemProperty -Path $runKey -Name 'AEMS Agent' -Value $value -Type String"
+        not in script_text
+    )
 
 
 def test_install_script_supports_no_start(script_text: str) -> None:

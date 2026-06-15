@@ -199,3 +199,23 @@ class TestPreflightPortCheck:
 
         assert excinfo.value.code == 0
         assert shown and "already running" in shown[0]
+
+    def test_preflight_does_not_set_so_reuseaddr_on_probe_socket(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Source-level guard: the probe loop must never call setsockopt
+        with SO_REUSEADDR on Windows it lets the bind() succeed against a
+        real listening squatter that also has SO_REUSEADDR (Python's
+        http.server defaults that way), which is exactly the v0.4.28
+        regression that broke ``test_busy_port_aems_agent_exits_0`` on
+        Windows CI. Keep this static check so the flag cannot quietly come
+        back."""
+        import inspect
+
+        src = inspect.getsource(cli_module._preflight_port_or_die)
+        # Allow setsockopt for other options (SO_LINGER etc.), but block
+        # the one that creates the ghost-bind hazard.
+        assert "SO_REUSEADDR" not in src, (
+            "SO_REUSEADDR must not be set on the preflight probe socket on Windows;"
+            " it would let the bind succeed against a real listener and false-pass."
+        )
