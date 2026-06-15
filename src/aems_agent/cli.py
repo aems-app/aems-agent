@@ -296,18 +296,28 @@ def _preflight_port_or_die(host: str, port: int) -> None:
     except (socket.gaierror, OSError):
         pass
 
-    # Total retry budget ~6 s — comfortably above the typical TIME_WAIT /
-    # taskkill cleanup window without making twice-launched users wait long.
+    # Total retry budget ~6 s — comfortably above the kernel's loopback
+    # listener-socket cleanup window after a taskkill /F without making
+    # twice-launched users wait long.
+    #
+    # On Windows, SO_REUSEADDR does NOT help reclaim a TIME_WAIT port
+    # (that's the inverse of SO_EXCLUSIVEADDRUSE, and the default behaviour
+    # is already permissive enough for our case anyway because taskkill /F
+    # aborts the listener via RST rather than putting it through FIN /
+    # TIME_WAIT). The retry-with-backoff loop is what actually closes the
+    # race: when the agent gets a fresh start within milliseconds of a
+    # taskkill, Windows occasionally hasn't yet flushed the dead process's
+    # bound sockets, and a single bind() attempt would false-positive
+    # "port in use". The SO_REUSEADDR set is left in place because it's
+    # the canonical "I don't care about ghost-bind safety" flag and is
+    # harmless on this loopback-only socket, but it is not the load-bearing
+    # part of the fix.
     backoffs = (0.0, 0.5, 1.0, 1.5, 1.5, 1.5)
     bind_err: Optional[OSError] = None
     for sleep in backoffs:
         if sleep:
             time.sleep(sleep)
         sock = socket.socket(family, socket.SOCK_STREAM)
-        # SO_REUSEADDR lets us re-grab a port whose old listener went away
-        # cleanly (TIME_WAIT). On Windows it behaves the way Linux does for
-        # SO_REUSEADDR; we deliberately do NOT set SO_EXCLUSIVEADDRUSE so a
-        # rapid restart cycle is not blocked by the kernel.
         try:
             sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         except OSError:

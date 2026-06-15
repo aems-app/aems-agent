@@ -111,13 +111,22 @@ Section "Install"
     IfSilent silent_relaunch end_install
 silent_relaunch:
     DetailPrint "Silent install: relaunching AEMS Agent tray..."
+    ; Defender (and other real-time AV scanners) opens freshly-written
+    ; executables for a sandbox scan that can hold a sharing lock on the
+    ; file for 1–5 s. The ``File /r`` above just finished writing
+    ; aems-agent.exe; if we call ExecShell immediately we can race the
+    ; scanner and ShellExecute → CreateProcess will return
+    ; ERROR_SHARING_VIOLATION silently. A modest sleep here lets the
+    ; scanner release the file before we ask Windows to run it.
+    Sleep 2000
     ; ExecShell goes through ShellExecute and creates a fully independent
     ; process — important here because we are *about* to return from the
     ; installer (which was itself spawned detached by the agent's
     ; POST /self-update). NSIS's bare ``Exec`` works for fire-and-forget
     ; on most setups but leaves the spawned tray with the installer's
-    ; hidden console context on some hardened Windows builds, where pystray
-    ; then fails to create its system tray icon. ExecShell sidesteps that.
+    ; hidden console context on some hardened Windows builds, where
+    ; pystray then fails to create its system tray icon. ExecShell
+    ; sidesteps that.
     ExecShell "open" "$INSTDIR\aems-agent.exe" "run --tray"
 end_install:
 SectionEnd

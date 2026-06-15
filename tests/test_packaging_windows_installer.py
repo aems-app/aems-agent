@@ -41,6 +41,33 @@ def test_windows_installer_relaunches_tray_in_silent_mode() -> None:
     )
 
 
+def test_windows_installer_waits_for_av_release_before_relaunch() -> None:
+    """The silent-relaunch branch must Sleep before calling ExecShell so
+    Defender / other real-time AV has time to release its sharing lock on
+    the freshly-written ``aems-agent.exe``. Without it, ShellExecute can
+    race the scanner and CreateProcess returns ERROR_SHARING_VIOLATION
+    silently. v0.4.29 added a 2 s sleep right before the ExecShell line.
+    """
+    src = INSTALLER_PATH.read_text(encoding="utf-8")
+
+    # Find the silent_relaunch label and look for a Sleep between it and the
+    # ExecShell line.
+    silent_block_start = src.find("silent_relaunch:")
+    exec_shell_pos = src.find('ExecShell "open" "$INSTDIR\\aems-agent.exe" "run --tray"')
+    assert silent_block_start != -1 and exec_shell_pos != -1
+    silent_block = src[silent_block_start:exec_shell_pos]
+    import re
+
+    sleeps_in_block = [
+        int(m.group(1)) for m in re.finditer(r"^\s*Sleep\s+(\d+)\s*$", silent_block, re.MULTILINE)
+    ]
+    assert sleeps_in_block, "silent_relaunch must Sleep before ExecShell so AV releases the lock"
+    assert max(sleeps_in_block) >= 2000, (
+        f"silent_relaunch Sleep is {max(sleeps_in_block)} ms; needs >= 2000 to clear"
+        " typical Defender real-time-scan locks on a freshly-written executable"
+    )
+
+
 def test_windows_installer_waits_for_port_release_after_taskkill() -> None:
     """The Sleep after taskkill must be long enough that the new agent's
     SO_REUSEADDR + retry preflight has time to grab the loopback port.

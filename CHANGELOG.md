@@ -2,6 +2,18 @@
 
 All notable changes to `aems-agent` are recorded here. Format follows [Keep a Changelog](https://keepachangelog.com/) and the project uses [SemVer](https://semver.org/).
 
+## 0.4.29 — 2026-06-15
+
+Follow-up to the v0.4.28 same-version reinstall fix after an independent third-party audit. Two concrete bugs closed and one misleading comment corrected.
+
+### Fixed
+
+- **Silent NSIS installer now waits 2 s after the file copy before launching the tray.** Defender (and other real-time AV scanners) opens the freshly-written `aems-agent.exe` for a sandbox scan that can hold a sharing lock on the file for 1–5 s. Without a Sleep before `ExecShell`, the previously-racy `CreateProcess` could return `ERROR_SHARING_VIOLATION` silently and the tray never started. Belt-and-suspenders with the existing 3 s post-taskkill Sleep; covered by a new `test_windows_installer_waits_for_av_release_before_relaunch` regression test.
+
+### Documentation
+
+- **`_preflight_port_or_die` SO_REUSEADDR comment corrected.** The previous wording claimed SO_REUSEADDR “lets us re-grab a port whose old listener went away cleanly (TIME_WAIT)”. That is true on Linux but inverted on Windows — there `SO_REUSEADDR` is the unsafe ghost-bind flag and `SO_EXCLUSIVEADDRUSE` is its safe counterpart, and the loopback-listener TIME_WAIT picture is different anyway because `taskkill /F` aborts via RST, not FIN. The load-bearing fix is the retry-with-backoff loop; SO_REUSEADDR is kept because it is harmless on a loopback socket but is not what closes the race.
+
 ## 0.4.28 — 2026-06-15
 
 Fix release. Closes the “same-version `/S` reinstall leaves the tray down” regression spotted on review of the v0.4.25 → v0.4.27 one-click flow. The agent now retries the port bind with `SO_REUSEADDR` for ~6 s before deciding the loopback port is occupied; the NSIS installer waits 3 s after `taskkill` and relaunches the tray via `ExecShell` (proper detached spawn) instead of bare `Exec`.
