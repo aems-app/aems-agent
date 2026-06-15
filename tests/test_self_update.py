@@ -183,6 +183,154 @@ class TestSelfUpdateHappyPath:
         assert spawned["path"].endswith("aems-agent-setup.exe")
 
 
+class TestMacOSSelfUpdate:
+    """macOS .dmg self-update path — implemented in v0.4.33.
+
+    The handover for v0.4.32 explicitly flagged macOS as ``return 501``
+    with a manual download fallback. v0.4.33 wires the full flow by
+    adding ``darwin`` to ``_SELF_UPDATE_ASSET_BY_PLATFORM`` and
+    extending ``_spawn_installer_detached`` to emit a relaunch helper
+    script. These tests do not require a real macOS box — they verify
+    the plumbing without invoking ``hdiutil``.
+    """
+
+    def test_darwin_is_in_self_update_asset_map(self) -> None:
+        """macOS must no longer 501; the route must download AEMS-Agent.dmg."""
+        from aems_agent import routes
+
+        assert routes._SELF_UPDATE_ASSET_BY_PLATFORM.get("darwin") == "AEMS-Agent.dmg"
+
+    def test_build_macos_relaunch_script_contains_required_steps(self) -> None:
+        """Static inspection of the generated bash. Pinning the shape so a
+        well-meaning refactor cannot silently drop the quit / mount /
+        replace / detach / relaunch sequence.
+        """
+        from aems_agent import routes
+
+        script = routes._build_macos_relaunch_script(Path("/tmp/AEMS-Agent.dmg"))
+        # Quit the running tray BEFORE replacing the .app.
+        assert "osascript" in script and "quit" in script
+        assert "pkill -f aems-agent" in script
+        # Mount the DMG read-only without a Finder window.
+        assert "hdiutil attach" in script
+        assert "-nobrowse" in script
+        assert "-readonly" in script
+        # Replace the installed bundle.
+        assert "/Applications/" in script
+        assert routes._MACOS_APP_BUNDLE_NAME in script
+        # ditto, not cp -R — preserves extended attributes.
+        assert "ditto" in script
+        # Detach the DMG (best-effort, the script tolerates a busy mount).
+        assert "hdiutil detach" in script
+        # Re-open the new app.
+        assert "open -a" in script
+        # The HTTP response must flush before kill — sleep gate at the top.
+        assert "sleep 2" in script
+
+    def test_build_macos_relaunch_script_quotes_dmg_path_with_spaces(self, tmp_path: Path) -> None:
+        """Defends against path-with-spaces shell injection / mis-parsing.
+
+        Uses ``tmp_path`` so the path is platform-correct (POSIX slashes
+        on macOS/Linux, backslashes on Windows). The relaunch script is
+        invoked by ``/bin/bash`` on macOS only, but the unit test runs on
+        every CI platform — pin on the ``shlex.quote`` invariant instead
+        of a hard-coded POSIX path.
+        """
+        import shlex
+
+        from aems_agent import routes
+
+        spaced_dir = tmp_path / "with space"
+        spaced_dir.mkdir()
+        dmg = spaced_dir / "AEMS-Agent.dmg"
+
+        script = routes._build_macos_relaunch_script(dmg)
+
+        expected_quoted = shlex.quote(str(dmg))
+        # If the path contains a space, shlex.quote wraps it in single
+        # quotes. The script must use that exact quoted form so bash
+        # tokenizes the DMG path as a single argument.
+        assert (
+            expected_quoted in script
+        ), f"script must contain shlex-quoted DMG path {expected_quoted!r}"
+        # And the raw unquoted form must NOT appear outside the quoted
+        # context — otherwise ``hdiutil attach $DMG`` would split on the
+        # space and try to mount the wrong file.
+        bare_path = str(dmg)
+        stripped = script.replace(expected_quoted, "")
+        assert (
+            bare_path not in stripped
+        ), "raw unquoted path must not appear outside the shlex-quoted context"
+
+    def test_spawn_macos_relaunch_writes_executable_script(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """``_spawn_macos_relaunch_script`` writes a 0o700 helper next to
+        the DMG and spawns ``/bin/bash <script>`` in a new session.
+        """
+        import subprocess
+
+        from aems_agent import routes
+
+        dmg = tmp_path / "AEMS-Agent.dmg"
+        dmg.write_bytes(b"fake dmg bytes")
+
+        captured: dict[str, Any] = {}
+
+        class _FakePopen:
+            pid = 4242
+
+            def __init__(self, args: list[str], **kwargs: Any) -> None:
+                captured["args"] = args
+                captured["kwargs"] = kwargs
+
+        monkeypatch.setattr(subprocess, "Popen", _FakePopen)
+
+        pid = routes._spawn_macos_relaunch_script(dmg)
+
+        assert pid == 4242
+        # bash + path-to-our-script
+        assert captured["args"][0] == "/bin/bash"
+        script_path = Path(captured["args"][1])
+        assert script_path.exists(), "helper script must be on disk before spawn"
+        assert script_path.parent == dmg.parent
+        # Owner-execute bit must be set (chmod 0o700). Skip on Windows where
+        # POSIX mode bits don't fully apply.
+        if sys.platform != "win32":
+            import stat as _stat
+
+            mode = script_path.stat().st_mode & 0o777
+            assert mode & _stat.S_IXUSR, f"script mode 0o{mode:o} lacks owner-execute"
+        # start_new_session=True so SIGTERM to this process doesn't cascade.
+        assert captured["kwargs"].get("start_new_session") is True
+        # close_fds + DEVNULL for full detachment.
+        assert captured["kwargs"].get("close_fds") is True
+
+    def test_spawn_installer_detached_routes_darwin_to_relaunch(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """``_spawn_installer_detached`` on darwin must delegate to the
+        macOS helper, NOT to the Windows ``Popen(installer.exe, /S)`` path.
+        """
+        from aems_agent import routes
+
+        called: dict[str, Any] = {}
+
+        def _fake_relaunch(p: Path) -> int:
+            called["path"] = str(p)
+            return 7777
+
+        monkeypatch.setattr(routes, "_spawn_macos_relaunch_script", _fake_relaunch)
+        monkeypatch.setattr(sys, "platform", "darwin")
+
+        dmg = tmp_path / "AEMS-Agent.dmg"
+        dmg.write_bytes(b"x")
+
+        pid = routes._spawn_installer_detached(dmg)
+        assert pid == 7777
+        assert called["path"] == str(dmg)
+
+
 class TestSumsParser:
     """The sha256sums.txt parser must accept both ' ' and ' *' separators."""
 

@@ -2,6 +2,18 @@
 
 All notable changes to `aems-agent` are recorded here. Format follows [Keep a Changelog](https://keepachangelog.com/) and the project uses [SemVer](https://semver.org/).
 
+## 0.4.33 — 2026-06-15
+
+Closes two gaps the v0.4.32 handover explicitly left open: the TOCTOU window between `_preflight_port_or_die` and uvicorn's own bind, and the macOS `.dmg` self-update path that was returning HTTP 501 with a manual-download fallback.
+
+### Fixed
+
+- **TOCTOU between preflight and uvicorn — closed.** `_preflight_port_or_die` now holds the bound socket and returns it to the caller; `_run_uvicorn_server` accepts it and dispatches via `uvicorn.Server.serve(sockets=[sock])` so uvicorn re-uses the same socket instead of binding the port a second time. Previously the brief gap between `sock.close()` in preflight and uvicorn's `bind()` was wide enough for a racing process to grab port 61234 and silently kill the new tray (PyInstaller `--noconsole` build, no tk dialog from uvicorn). New regression test `test_preflight_holds_port_until_caller_closes_socket` in `tests/test_cli.py` proves a second `bind()` to the same port raises `OSError` while the preflight socket is alive; new `test_run_uvicorn_server_hands_socket_to_server_serve` pins that the pre-bound socket actually reaches `Server.serve(sockets=[...])`.
+
+### Added
+
+- **macOS `.dmg` self-update flow.** `POST /self-update` no longer returns 501 on `sys.platform == "darwin"` — the route now downloads `AEMS-Agent.dmg`, verifies SHA-256 against `sha256sums.txt`, and spawns a detached relaunch shell script that: (1) waits 2 s so the HTTP response flushes, (2) quits the running tray via `osascript` with a `pkill -f aems-agent` fallback, (3) mounts the DMG read-only via `hdiutil attach -nobrowse -readonly`, (4) replaces `/Applications/AEMS Agent.app` via `ditto` (preserves extended attributes / quarantine flags), (5) detaches the DMG (best-effort retry), (6) re-opens the app via `open -a`. The script is spawned via `Popen(..., start_new_session=True)` so SIGTERM to the agent does not cascade into the relaunch. New `TestMacOSSelfUpdate` suite in `tests/test_self_update.py` covers the asset-map entry, the script's command shape, shell-quoting of paths with spaces, the on-disk script's 0o700 mode, and the `_spawn_installer_detached` darwin routing. **Not yet exercised on a real Mac** — the unit tests verify the plumbing without invoking `hdiutil`; the next macOS-equipped session should pair an agent, then run the live one-click flow.
+
 ## 0.4.32 — 2026-06-15
 
 Lint-only release. v0.4.31's CI ran with the v0.4.30 commit body (release-tag race) so the mypy follow-up did not land in the v0.4.31 artifacts. v0.4.32 ships the same code with the type annotation tightened.

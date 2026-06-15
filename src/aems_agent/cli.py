@@ -173,7 +173,13 @@ def run(
     # PyInstaller builds produces no visible output — the user sees the .exe
     # exit silently with no tray icon (Zohar 2026-05-25). Probe first so we
     # can show a tk dialog explaining what's wrong.
-    _preflight_port_or_die(host, port)
+    #
+    # The probe also HOLDS the bound socket and hands it to uvicorn so a
+    # second process can't squat the port in the window between our
+    # bind+close and uvicorn's own bind (TOCTOU). When `sock` is not None,
+    # `_run_uvicorn_server` will call ``Server.serve(sockets=[sock])`` and
+    # uvicorn skips its own bind entirely.
+    sock = _preflight_port_or_die(host, port)
 
     from .app import create_app
 
@@ -184,11 +190,11 @@ def run(
     # background as before.
     if tray:
         if _tray_requires_main_thread():
-            _run_with_tray_on_main_thread(config_dir, agent_app, host, port)
+            _run_with_tray_on_main_thread(config_dir, agent_app, host, port, sock=sock)
             return
         _start_tray(config_dir, agent_app)
 
-    _run_uvicorn_server(agent_app, host, port)
+    _run_uvicorn_server(agent_app, host, port, sock=sock)
 
 
 def _tray_requires_main_thread() -> bool:
@@ -216,11 +222,37 @@ def _prepare_tray_icon(config_dir: Path, agent_app: Optional[FastAPI]) -> Any:
     return icon
 
 
-def _run_uvicorn_server(agent_app: FastAPI, host: str, port: int) -> None:
-    """Run uvicorn for the FastAPI app."""
+def _run_uvicorn_server(
+    agent_app: FastAPI,
+    host: str,
+    port: int,
+    *,
+    sock: Optional[Any] = None,
+) -> None:
+    """Run uvicorn for the FastAPI app.
+
+    If ``sock`` is provided it must be a ``socket.socket`` that was already
+    bound to ``(host, port)`` by ``_preflight_port_or_die`` and is NOT in
+    listening state. In that case we drop down to
+    ``Config + Server.serve(sockets=[sock])`` so uvicorn re-uses the bound
+    socket instead of binding the port a second time — that second bind
+    is the TOCTOU window where another process can squat the port between
+    our preflight close and uvicorn's own bind.
+    """
+    import asyncio
+
     import uvicorn  # type: ignore
 
-    uvicorn.run(agent_app, host=host, port=port, log_level="info")
+    if sock is None:
+        uvicorn.run(agent_app, host=host, port=port, log_level="info")
+        return
+
+    config = uvicorn.Config(agent_app, host=host, port=port, log_level="info")
+    server = uvicorn.Server(config)
+    # Server.serve() calls sock.listen(config.backlog) on each handed-in
+    # socket, then drives the event loop. Run via asyncio.run so this
+    # function still blocks like the uvicorn.run path it replaces.
+    asyncio.run(server.serve(sockets=[sock]))
 
 
 def _run_with_tray_on_main_thread(
@@ -228,6 +260,8 @@ def _run_with_tray_on_main_thread(
     agent_app: FastAPI,
     host: str,
     port: int,
+    *,
+    sock: Optional[Any] = None,
 ) -> None:
     """Start uvicorn in a worker thread so macOS can run the tray on main.
 
@@ -235,6 +269,10 @@ def _run_with_tray_on_main_thread(
     we still want the agent serving — matching the Windows/Linux behaviour
     where `_start_tray` failures are non-fatal. In that case we fall back to
     running uvicorn directly on the main thread.
+
+    ``sock`` is the pre-bound socket from ``_preflight_port_or_die``; passed
+    through so the worker thread serves on the same socket the preflight
+    held, closing the TOCTOU window between preflight and uvicorn's bind.
     """
     try:
         from .tray import run_icon_safely
@@ -246,17 +284,18 @@ def _run_with_tray_on_main_thread(
             "  System tray: unavailable (install pystray: pip install pystray pillow)",
             err=True,
         )
-        _run_uvicorn_server(agent_app, host, port)
+        _run_uvicorn_server(agent_app, host, port, sock=sock)
         return
     except Exception as exc:
         _set_tray_state(agent_app, "failed", str(exc))
         typer.echo(f"  System tray: failed to start ({exc})", err=True)
-        _run_uvicorn_server(agent_app, host, port)
+        _run_uvicorn_server(agent_app, host, port, sock=sock)
         return
 
     server_thread = threading.Thread(
         target=_run_uvicorn_server,
         args=(agent_app, host, port),
+        kwargs={"sock": sock},
         daemon=False,
         name="aems-uvicorn",
     )
@@ -266,8 +305,15 @@ def _run_with_tray_on_main_thread(
     run_icon_safely(icon, agent_app)
 
 
-def _preflight_port_or_die(host: str, port: int) -> None:
+def _preflight_port_or_die(host: str, port: int) -> Any:
     """Verify the agent can bind ``port`` before uvicorn tries.
+
+    On success returns a ``socket.socket`` that is already bound to
+    ``(host, port)`` but NOT yet in listening state. The caller hands this
+    to ``_run_uvicorn_server(..., sock=sock)`` so uvicorn re-uses the
+    bound socket instead of binding the port a second time — closing the
+    TOCTOU window where another process could grab the port between our
+    bind+close and uvicorn's own bind.
 
     If the port is in use we attempt to identify whether the squatter is
     another AEMS Agent (responds to ``GET /status``). If yes, we show a
@@ -319,8 +365,11 @@ def _preflight_port_or_die(host: str, port: int) -> None:
         sock = socket.socket(family, socket.SOCK_STREAM)
         try:
             sock.bind(sockaddr)
-            sock.close()
-            return
+            # Hand the bound socket back to the caller so uvicorn re-uses
+            # it instead of binding a second time. Do NOT call .close()
+            # here — that would reopen the TOCTOU window this function
+            # exists to close.
+            return sock
         except OSError as e:
             bind_err = e
             sock.close()
