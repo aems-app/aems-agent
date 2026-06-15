@@ -327,9 +327,15 @@ jobs:
             fi
           done
 
+          # sha256sums.txt — basename only, never the artifact/ prefix path,
+          # so v0.4.24's /self-update parser can read it. v0.4.27+ agents
+          # handle both forms, but every release between v0.4.24 and the
+          # one users actually run gets bridged once they self-update, so
+          # the basename form is the safest cross-version choice.
           : > artifacts/sha256sums.txt
           for f in $ASSETS; do
-            sha256sum "$f" >> artifacts/sha256sums.txt
+            sha=$(sha256sum "$f" | awk '{print $1}')
+            printf '%s  %s\n' "$sha" "$(basename "$f")" >> artifacts/sha256sums.txt
           done
 
           VERSION="${GITHUB_REF#refs/tags/v}"
