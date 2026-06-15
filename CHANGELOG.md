@@ -2,6 +2,14 @@
 
 All notable changes to `aems-agent` are recorded here. Format follows [Keep a Changelog](https://keepachangelog.com/) and the project uses [SemVer](https://semver.org/).
 
+## 0.4.22 — 2026-06-15
+
+Packaging follow-up. End-user behaviour and the API surface are unchanged.
+
+### Fixed
+
+- **Portable Windows `install.ps1` autostart now actually writes the registry value.** v0.4.21 added the autostart step but used `Set-ItemProperty -Path ... -Name 'AEMS Agent' -Value $value -Type String`; `Set-ItemProperty` does not accept `-Type`, so PowerShell silently routed the call into the `catch` block, surfaced a soft warning, and left `HKCU\Software\Microsoft\Windows\CurrentVersion\Run\AEMS Agent` unset. Portable-bundle users were still missing autostart after sign-out / reboot despite the v0.4.21 release notes claiming the gap was closed. Switched to `New-ItemProperty ... -PropertyType String -Force`, which is the canonical cmdlet for the create-or-overwrite case, and added a regression test that fails if the broken form ever reappears.
+
 ## 0.4.21 — 2026-06-15
 
 Packaging follow-up. End-user behaviour and the API surface are unchanged.
