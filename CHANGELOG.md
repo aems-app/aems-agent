@@ -2,6 +2,14 @@
 
 All notable changes to `aems-agent` are recorded here. Format follows [Keep a Changelog](https://keepachangelog.com/) and the project uses [SemVer](https://semver.org/).
 
+## 0.4.24 — 2026-06-15
+
+Feature release. New endpoint, no breaking changes.
+
+### Added
+
+- **`POST /self-update` — one-click in-browser auto-update.** The browser posts `{"version": "0.4.24"}`, the agent fetches `sha256sums.txt` for that release, downloads the platform installer, verifies the SHA-256, then spawns the installer detached (Windows: `aems-agent-setup.exe /S`). Combined with the v0.4.23 silent-relaunch fix, the user never has to find the downloaded `.exe` in their Downloads folder, double-click it, or click through any UAC/install pages — the banner button just works. The installer's own `taskkill` step takes the running agent down a few seconds later; the browser polls `/status` to confirm the new version comes back. Linux `.tar.gz` and macOS `.dmg` self-update return HTTP 501 with a `release_url` pointing to the manual GitHub release link so the existing banner UX still degrades cleanly. Test coverage in `tests/test_self_update.py` (validation, platform gate, SHA mismatch abort, happy-path spawn stub, sums parser).
+
 ## 0.4.23 — 2026-06-15
 
 Packaging follow-up. End-user behaviour and the API surface are unchanged.

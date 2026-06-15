@@ -31,6 +31,7 @@ Endpoint summary:
     POST /canvas/download-submissions                   - Start download job (auth, encrypted)
     GET  /canvas/download-jobs/{job_id}                 - Poll download progress (auth)
     POST /grading-bundle/{aid}/{sid}                    - Generate grading input bundle (auth)
+    POST /self-update                                   - Download + apply a release (auth, Windows only)
 """
 
 import asyncio
@@ -354,6 +355,240 @@ async def info(
         "version": AGENT_VERSION,
         "api_version": API_VERSION,
         "min_client_version": MIN_CLIENT_API_VERSION,
+    }
+
+
+# ---------- /self-update ----------
+#
+# One-click in-browser auto-update. The browser POSTs the target version; the
+# agent downloads the platform installer from the matching GitHub release,
+# verifies it against the release's sha256sums.txt, then spawns the installer
+# detached so the response can flush before the installer's taskkill step
+# brings the agent down. The NSIS installer's silent-mode IfSilent block
+# (shipped in v0.4.23) relaunches the tray after the file swap; the browser
+# polls /status to confirm the new version came up.
+#
+# Windows-only for now. macOS .dmg and Linux .tar.gz return 501 with a
+# pointer to the manual download link in the same JSON so the banner can
+# still surface a useful UX.
+
+_SELF_UPDATE_VERSION_RE = re.compile(r"^\d+\.\d+\.\d+(?:[-+.][\w.+-]+)?$")
+
+# Map sys.platform → release asset filename. Keeping this explicit so adding a
+# new platform requires a code review.
+_SELF_UPDATE_ASSET_BY_PLATFORM: Dict[str, str] = {
+    "win32": "aems-agent-setup.exe",
+}
+
+# Override these via env or monkeypatch in tests; defaults are the real prod URLs.
+_SELF_UPDATE_GITHUB_BASE = os.environ.get(
+    "AEMS_AGENT_RELEASE_BASE_URL",
+    "https://github.com/aems-app/aems-agent/releases/download",
+)
+
+
+class SelfUpdateRequest(BaseModel):
+    """POST /self-update payload."""
+
+    version: str = Field(..., min_length=3, max_length=64)
+
+    @field_validator("version")
+    @classmethod
+    def _strip_v_prefix(cls, v: str) -> str:
+        v = v.strip()
+        if v.startswith(("v", "V")):
+            v = v[1:]
+        if not _SELF_UPDATE_VERSION_RE.match(v):
+            raise ValueError("version must be a stable semver like 0.4.24")
+        return v
+
+
+def _fetch_text(url: str, timeout: float = 30.0) -> str:
+    """HTTP GET → text. Kept as a free function so tests can monkeypatch."""
+    import urllib.request
+
+    req = urllib.request.Request(url, headers={"User-Agent": f"aems-agent/{AGENT_VERSION}"})
+    with urllib.request.urlopen(req, timeout=timeout) as resp:  # noqa: S310 — fixed prefix
+        return resp.read().decode("utf-8")
+
+
+def _download_to(url: str, dest: Path, timeout: float = 120.0) -> int:
+    """HTTP GET → file on disk. Returns bytes written."""
+    import urllib.request
+
+    req = urllib.request.Request(url, headers={"User-Agent": f"aems-agent/{AGENT_VERSION}"})
+    total = 0
+    with urllib.request.urlopen(req, timeout=timeout) as resp:  # noqa: S310
+        with open(dest, "wb") as f:
+            for chunk in iter(lambda: resp.read(65536), b""):
+                f.write(chunk)
+                total += len(chunk)
+    return total
+
+
+def _parse_sums_line(text: str, target_filename: str) -> Optional[str]:
+    """Pull the SHA-256 hex for `target_filename` out of a sha256sums.txt file.
+
+    Format per line: ``<64-hex>  filename`` or ``<64-hex> *filename``
+    (the asterisk marks binary mode; both are valid).
+    """
+    for raw in text.splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#"):
+            continue
+        parts = line.split()
+        if len(parts) < 2:
+            continue
+        sha = parts[0]
+        name = parts[1].lstrip("*")
+        if name == target_filename and len(sha) == 64 and all(c in "0123456789abcdef" for c in sha.lower()):
+            return sha.lower()
+    return None
+
+
+def _spawn_installer_detached(installer_path: Path) -> int:
+    """Spawn the Windows NSIS installer with /S, fully detached.
+
+    Detached so the installer's taskkill step can take down THIS process
+    without orphaning or terminating its child. Returns the child PID.
+    """
+    import subprocess
+
+    if sys.platform != "win32":  # pragma: no cover — guarded at call site
+        raise RuntimeError("detached spawn only implemented for Windows")
+
+    # creationflags from MSDN: 0x00000008 = DETACHED_PROCESS,
+    # 0x00000200 = CREATE_NEW_PROCESS_GROUP.
+    DETACHED_PROCESS = 0x00000008
+    CREATE_NEW_PROCESS_GROUP = 0x00000200
+
+    p = subprocess.Popen(  # noqa: S603 — path is from our own tempdir
+        [str(installer_path), "/S"],
+        creationflags=DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP,
+        close_fds=True,
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+    return p.pid
+
+
+@router.post("/self-update")
+async def self_update(
+    payload: SelfUpdateRequest,
+    _token: str = Depends(_verify_token),
+    _rl: None = Depends(_check_rate_limit),
+) -> Dict[str, Any]:
+    """Download + apply a published release of this agent.
+
+    The agent does all the work: GitHub download, SHA verification against the
+    release's sha256sums.txt, detached spawn of the platform installer. The
+    browser only POSTs `{"version": "0.4.24"}` and polls /status.
+
+    Returns 202-equivalent JSON immediately; the installer may kill this
+    process shortly after the response flushes.
+    """
+    version = payload.version
+
+    asset_name = _SELF_UPDATE_ASSET_BY_PLATFORM.get(sys.platform)
+    if asset_name is None:
+        # Surface a useful payload for the banner UX: tell the browser which
+        # asset it would have downloaded manually so it can fall back to the
+        # release page link without further round-trips.
+        raise HTTPException(
+            status_code=501,
+            detail={
+                "code": "platform_unsupported",
+                "platform": sys.platform,
+                "message": (
+                    f"In-place self-update is not implemented for {sys.platform!r}. "
+                    "Download the release manually from the GitHub release page."
+                ),
+                "release_url": f"https://github.com/aems-app/aems-agent/releases/tag/v{version}",
+            },
+        )
+
+    base = f"{_SELF_UPDATE_GITHUB_BASE.rstrip('/')}/v{version}"
+    sums_url = f"{base}/sha256sums.txt"
+    asset_url = f"{base}/{asset_name}"
+
+    logger.info(
+        "self-update: fetching sha256sums.txt for v%s from %s", version, sums_url
+    )
+    try:
+        sums_text = _fetch_text(sums_url, timeout=30.0)
+    except Exception as e:  # noqa: BLE001 — surface as a clean 502
+        raise HTTPException(
+            status_code=502,
+            detail={"code": "sums_unreachable", "error": str(e), "url": sums_url},
+        ) from None
+
+    expected_sha = _parse_sums_line(sums_text, asset_name)
+    if expected_sha is None:
+        raise HTTPException(
+            status_code=502,
+            detail={
+                "code": "asset_not_in_manifest",
+                "asset": asset_name,
+                "version": version,
+            },
+        )
+
+    tmpdir = Path(tempfile.gettempdir()) / "aems-agent-self-update"
+    tmpdir.mkdir(parents=True, exist_ok=True)
+    installer_path = tmpdir / asset_name
+
+    logger.info("self-update: downloading %s → %s", asset_url, installer_path)
+    try:
+        size = _download_to(asset_url, installer_path, timeout=300.0)
+    except Exception as e:  # noqa: BLE001
+        with suppress(FileNotFoundError):
+            installer_path.unlink()
+        raise HTTPException(
+            status_code=502,
+            detail={"code": "download_failed", "error": str(e), "url": asset_url},
+        ) from None
+
+    # Verify SHA-256
+    h = hashlib.sha256()
+    with open(installer_path, "rb") as f:
+        for chunk in iter(lambda: f.read(65536), b""):
+            h.update(chunk)
+    actual_sha = h.hexdigest()
+    if actual_sha != expected_sha:
+        with suppress(FileNotFoundError):
+            installer_path.unlink()
+        logger.error(
+            "self-update: SHA mismatch on %s — expected %s, got %s",
+            asset_name,
+            expected_sha,
+            actual_sha,
+        )
+        raise HTTPException(
+            status_code=502,
+            detail={
+                "code": "sha_mismatch",
+                "expected": expected_sha,
+                "actual": actual_sha,
+            },
+        )
+
+    logger.info("self-update: SHA verified, spawning installer detached")
+    pid = _spawn_installer_detached(installer_path)
+    logger.info("self-update: installer PID=%s; this process will be killed shortly", pid)
+
+    return {
+        "status": "spawned",
+        "version": version,
+        "asset": asset_name,
+        "installer_path": str(installer_path),
+        "installer_pid": pid,
+        "installer_size_bytes": size,
+        "note": (
+            "The installer will kill this process within a few seconds, "
+            "copy the new files, and relaunch the tray. Poll /status to "
+            "confirm the new version."
+        ),
     }
 
 
