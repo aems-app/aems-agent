@@ -2,6 +2,14 @@
 
 All notable changes to `aems-agent` are recorded here. Format follows [Keep a Changelog](https://keepachangelog.com/) and the project uses [SemVer](https://semver.org/).
 
+## 0.4.23 — 2026-06-15
+
+Packaging follow-up. End-user behaviour and the API surface are unchanged.
+
+### Fixed
+
+- **Silent NSIS installer (`/S`) now relaunches the tray after upgrading.** v0.4.22 and earlier only started the agent via `MUI_FINISHPAGE_RUN`, which is part of the finish page that silent mode skips entirely. The install section already killed the running tray to free `aems-agent.exe` for overwrite, so a `/S` upgrade left the agent down for the user until they re-launched it by hand. Added an `IfSilent` branch at the end of the install section that calls `Exec '"$INSTDIR\aems-agent.exe" run --tray'` only when silent, so attended installs keep their finish-page checkbox UX unchanged. Added a regression test in `tests/test_packaging_windows_installer.py` that asserts the silent-relaunch block is present and ordered correctly.
+
 ## 0.4.22 — 2026-06-15
 
 Packaging follow-up. End-user behaviour and the API surface are unchanged.
@@ -9,6 +17,8 @@ Packaging follow-up. End-user behaviour and the API surface are unchanged.
 ### Fixed
 
 - **Portable Windows `install.ps1` autostart now actually writes the registry value.** v0.4.21 added the autostart step but used `Set-ItemProperty -Path ... -Name 'AEMS Agent' -Value $value -Type String`; `Set-ItemProperty` does not accept `-Type`, so PowerShell silently routed the call into the `catch` block, surfaced a soft warning, and left `HKCU\Software\Microsoft\Windows\CurrentVersion\Run\AEMS Agent` unset. Portable-bundle users were still missing autostart after sign-out / reboot despite the v0.4.21 release notes claiming the gap was closed. Switched to `New-ItemProperty ... -PropertyType String -Force`, which is the canonical cmdlet for the create-or-overwrite case, and added a regression test that fails if the broken form ever reappears.
+
+  *Caveat (2026-06-15 retest):* `Set-ItemProperty -Type String` against an HKCU path actually does work on both Windows PowerShell 5.1 and PowerShell 7 because the Registry PSDrive supplies `-Type` as a dynamic parameter. The v0.4.21 form was therefore not silently broken on stock Windows. The v0.4.22 fix still ships because `New-ItemProperty -Force` is the canonical create-or-overwrite cmdlet (the previous form gave PSCore-only warnings on some configurations and was less idempotent), but the framing in the original v0.4.22 changelog overstated the breakage.
 
 ## 0.4.21 — 2026-06-15
 

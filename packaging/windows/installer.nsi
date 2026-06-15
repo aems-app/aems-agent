@@ -96,6 +96,16 @@ Section "Install"
     WriteRegStr HKCU "Software\Classes\aems-agent\DefaultIcon" "" '"$INSTDIR\aems-agent.exe",1'
     WriteRegStr HKCU "Software\Classes\aems-agent\shell\open\command" "" \
         '"$INSTDIR\aems-agent.exe" run --tray --launch-from-uri "%1"'
+
+    ; Silent installs (auto-update, scripted reinstall) skip the finish page,
+    ; so MUI_FINISHPAGE_RUN never fires. We killed the previous tray at the
+    ; top of this section; relaunch it here so the agent comes back without
+    ; manual intervention. Attended installs leave the finish page in charge.
+    IfSilent silent_relaunch end_install
+silent_relaunch:
+    DetailPrint "Silent install: relaunching AEMS Agent tray..."
+    Exec '"$INSTDIR\aems-agent.exe" run --tray'
+end_install:
 SectionEnd
 
 ; Uninstaller section
