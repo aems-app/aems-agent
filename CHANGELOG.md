@@ -2,6 +2,14 @@
 
 All notable changes to `aems-agent` are recorded here. Format follows [Keep a Changelog](https://keepachangelog.com/) and the project uses [SemVer](https://semver.org/).
 
+## 0.4.25 — 2026-06-15
+
+Verification release. End-user behaviour and the API surface are unchanged from v0.4.24.
+
+### Verified
+
+- **One-click in-browser auto-update flow.** Used the v0.4.24 `POST /self-update` endpoint via the redesigned card-layout banner in `aems-web` to upgrade the running agent in place. The banner now shows the release notes inline (this very list), a primary "Update now" button, and folds the manual `.exe` download into a secondary action so it does not compete with the in-place flow. The user clicks once and the agent comes back at the new version without leaving the page or seeing any installer UI.
+
 ## 0.4.24 — 2026-06-15
 
 Feature release. New endpoint, no breaking changes.
