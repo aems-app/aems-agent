@@ -19,10 +19,10 @@ import threading
 from pathlib import Path
 from typing import Any, Optional
 
-logger = logging.getLogger(__name__)
-
 import typer
 from fastapi import FastAPI
+
+logger = logging.getLogger(__name__)
 
 
 def _ensure_stdio_streams() -> None:

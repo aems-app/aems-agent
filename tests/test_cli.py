@@ -204,18 +204,35 @@ class TestPreflightPortCheck:
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """Source-level guard: the probe loop must never call setsockopt
-        with SO_REUSEADDR on Windows it lets the bind() succeed against a
-        real listening squatter that also has SO_REUSEADDR (Python's
+        with SO_REUSEADDR. On Windows it lets the bind() succeed against
+        a real listening squatter that also has SO_REUSEADDR (Python's
         http.server defaults that way), which is exactly the v0.4.28
         regression that broke ``test_busy_port_aems_agent_exits_0`` on
-        Windows CI. Keep this static check so the flag cannot quietly come
-        back."""
-        import inspect
+        Windows CI. Keep this static check so the flag cannot quietly
+        come back.
 
-        src = inspect.getsource(cli_module._preflight_port_or_die)
-        # Allow setsockopt for other options (SO_LINGER etc.), but block
-        # the one that creates the ghost-bind hazard.
-        assert "SO_REUSEADDR" not in src, (
+        Strips comments and docstrings from the source first so the
+        explanation of *why* the flag is forbidden doesn't false-positive
+        the check.
+        """
+        import inspect
+        import io
+        import token
+        import tokenize
+
+        full_src = inspect.getsource(cli_module._preflight_port_or_die)
+        code_tokens: list[str] = []
+        for tok in tokenize.generate_tokens(io.StringIO(full_src).readline):
+            if tok.type in (token.COMMENT, token.STRING):
+                continue
+            code_tokens.append(tok.string)
+        code_only = " ".join(code_tokens)
+
+        assert "SO_REUSEADDR" not in code_only, (
             "SO_REUSEADDR must not be set on the preflight probe socket on Windows;"
             " it would let the bind succeed against a real listener and false-pass."
+        )
+        assert "setsockopt" not in code_only, (
+            "No setsockopt call expected in _preflight_port_or_die — the retry"
+            " loop is what closes the race after taskkill /F."
         )

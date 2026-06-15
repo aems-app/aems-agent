@@ -2,6 +2,15 @@
 
 All notable changes to `aems-agent` are recorded here. Format follows [Keep a Changelog](https://keepachangelog.com/) and the project uses [SemVer](https://semver.org/).
 
+## 0.4.31 — 2026-06-15
+
+Fix release. v0.4.30 had the right code change but two CI follow-ups: ruff E402 on a misplaced logger declaration, and the new SO_REUSEADDR static test matched its own explanatory comment.
+
+### Fixed
+
+- **CI lint clean.** Moved `logger = logging.getLogger(__name__)` after the third-party imports in `cli.py` so ruff E402 stops firing.
+- **`test_preflight_does_not_set_so_reuseaddr_on_probe_socket` now strips comments + string literals before checking for `SO_REUSEADDR` / `setsockopt`.** The previous form did a raw substring check and would have refused to merge any commit that even mentions the flag in an explanatory comment — the docstring of `_preflight_port_or_die` does exactly that to explain why the flag is forbidden. Tokenize-then-filter is the right tool.
+
 ## 0.4.30 — 2026-06-15
 
 Fix release. v0.4.28's preflight added `SO_REUSEADDR` to its probe socket as a "harmless" extra; CI caught that this is actively wrong on Windows.

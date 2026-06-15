@@ -6,8 +6,7 @@ import hashlib
 import importlib.util
 import sys
 from pathlib import Path
-from typing import Any, Dict
-from unittest.mock import patch
+from typing import Any
 
 import pytest
 
