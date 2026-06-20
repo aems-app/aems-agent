@@ -129,6 +129,28 @@ AGPL-3.0-or-later. See [LICENSE](LICENSE).
 
 **Relicense note (v0.3.2, 2026-05-11):** Versions ≤ 0.3.1 were licensed under MIT. From v0.3.2 the agent is AGPL-3.0-or-later because it links PyMuPDF (AGPL-3.0) in-process via `aems-pdf-annotator`. The MIT licence that previously applied to forks of v0.3.1 and earlier remains in effect for those versions.
 
+## Code signing policy
+
+Windows release installers are signed when the SignPath Foundation setup and
+GitHub Actions settings are configured. The intended public signing statement is:
+Free code signing provided by SignPath.io, certificate by SignPath Foundation.
+Until that setup is approved and enabled, Windows installer artifacts are
+published unsigned and may show Windows SmartScreen warnings.
+
+Signing roles:
+
+- Committers and reviewers: repository maintainers with write access in the
+  `aems-app` GitHub organization.
+- Release signing approvers: `aems-app` organization owners or maintainers
+  delegated by the owners.
+
+Privacy statement for signed Windows installers: the agent runs locally on the
+user's machine and does not transfer PDF content or local file data to networked
+systems unless the user explicitly starts a Canvas, hosted AEMS, or offline
+workflow that requests it. See [SECURITY.md](SECURITY.md) for the local threat
+model and [docs/windows-code-signing.md](docs/windows-code-signing.md) for the
+SignPath setup.
+
 ## Links
 
 - Homepage: [https://aems.app](https://aems.app)
