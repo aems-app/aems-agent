@@ -547,10 +547,16 @@ def _build_macos_relaunch_script(dmg_path: Path) -> str:
         "sleep 1\n"
         "# 3. Mount the DMG read-only, no Finder window.\n"
         'hdiutil attach "$DMG" -nobrowse -readonly -mountpoint "$MOUNT" >/dev/null\n'
-        "# 4. Replace the installed .app. ditto preserves extended\n"
-        "#    attributes / quarantine flags better than cp -R.\n"
+        "# 4. Replace the installed .app. ditto reproduces the bundle\n"
+        "#    (Mach-O signatures, symlink layout) faithfully, unlike cp -R.\n"
         'rm -rf "$APP_DST"\n'
         'ditto "$MOUNT/$BUNDLE" "$APP_DST"\n'
+        "# 4b. Strip the quarantine xattr the downloaded DMG carried so the\n"
+        "#     freshly-replaced ad-hoc-signed bundle does NOT re-trigger\n"
+        "#     Gatekeeper's 'damaged / cannot be opened' block on the next\n"
+        "#     manual launch. Harmless once the build is Developer-ID\n"
+        "#     notarized; essential while it is only ad-hoc signed.\n"
+        'xattr -dr com.apple.quarantine "$APP_DST" >/dev/null 2>&1 || true\n'
         "# 5. Detach the DMG. Retry once if it's still busy.\n"
         'hdiutil detach "$MOUNT" >/dev/null 2>&1 || (sleep 2 && hdiutil detach "$MOUNT" -force >/dev/null 2>&1) || true\n'
         'rm -rf "$MOUNT" 2>/dev/null || true\n'

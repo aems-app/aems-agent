@@ -22,30 +22,39 @@ Pre-built installers — no Python needed — are on the [Releases page](https:/
 | Platform | File | Notes |
 |----------|------|-------|
 | Windows | `aems-agent-setup.exe` | Installs to `%LOCALAPPDATA%\AEMS Agent` |
-| macOS   | `AEMS-Agent.dmg`       | Drag to Applications. **First launch: see Sequoia + older-macOS steps below** |
+| macOS   | `AEMS-Agent.dmg`       | Drag to Applications, then run the first-launch helper in the DMG |
 | Linux   | `aems-agent-linux-x86_64.tar.gz` | Extract, run `./install.sh`, then start `aems-agent run --tray` or enable the user service |
 
 #### macOS: first launch
 
 The macOS download is signed with a **free ad-hoc signature**, not an Apple
-Developer ID (we are not in the Apple Developer Program). That means macOS
-Gatekeeper will refuse to open the app on a normal double-click and warns that
-it cannot verify the publisher. You only need to clear this **once**; the path
-depends on which macOS version you are on.
+Developer ID (we are not in the Apple Developer Program). Browser downloads
+also carry Apple's quarantine flag. To make that free path less painful, the
+DMG includes a double-clickable helper named
+`Open AEMS Agent (first launch).command`.
 
-##### macOS 15 Sequoia (and later) — preferred path
+Preferred path:
 
-Apple changed the Gatekeeper bypass UX in Sequoia, so right-click → Open is
-no longer the documented reliable path on Sequoia.
+1. Open the downloaded `AEMS-Agent.dmg`.
+2. Drag **AEMS Agent** to **Applications**.
+3. Double-click **Open AEMS Agent (first launch).command** in the same DMG.
+   It removes the browser quarantine flag from `/Applications/AEMS Agent.app`
+   and opens the app.
+4. Use **AEMS Agent** normally after that.
 
-1. Open the downloaded `AEMS-Agent.dmg` and drag **AEMS Agent** to Applications.
-2. Double-click **AEMS Agent**. Dismiss the warning that appears.
-3. Open **System Settings → Privacy & Security**.
-4. Scroll to the **Security** section. You should see a notice that AEMS Agent
+##### macOS 15 Sequoia (and later) fallback
+
+Apple changed the Gatekeeper bypass UX in Sequoia, so right-click -> Open is
+no longer the documented reliable path on Sequoia. If the helper is not
+available or macOS still blocks the app:
+
+1. Double-click **AEMS Agent** in Applications. Dismiss the warning that appears.
+2. Open **System Settings -> Privacy & Security**.
+3. Scroll to the **Security** section. You should see a notice that AEMS Agent
    was blocked.
-5. Click **Open / Open Anyway** next to AEMS Agent. Authenticate with Touch ID
+4. Click **Open / Open Anyway** next to AEMS Agent. Authenticate with Touch ID
    or your password if prompted.
-6. Launch AEMS Agent again and confirm **Open** in the new dialog.
+5. Launch AEMS Agent again and confirm **Open** in the new dialog.
 
 After that the app runs normally on subsequent launches.
 
@@ -55,7 +64,7 @@ After that the app runs normally on subsequent launches.
 ##### macOS 11 Big Sur through macOS 14 Sonoma
 
 1. Open the downloaded `AEMS-Agent.dmg` and drag **AEMS Agent** to Applications.
-2. In **Applications**, **right-click** (or Control-click) AEMS Agent → **Open**.
+2. In **Applications**, **right-click** (or Control-click) AEMS Agent -> **Open**.
 3. Confirm the warning dialog by clicking **Open** again.
 
 After that the app runs normally; macOS remembers your choice.

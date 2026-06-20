@@ -15,7 +15,8 @@ def test_readme_summary_row_points_macos_users_to_versioned_first_launch_steps()
     readme = (PROJECT_ROOT / "README.md").read_text(encoding="utf-8")
 
     assert "First launch: right-click the app -> Open" not in readme
-    assert "First launch: see Sequoia + older-macOS steps below" in readme
+    assert "Open AEMS Agent (first launch).command" in readme
+    assert "removes the browser quarantine flag" in readme
 
 
 def test_release_workflow_uses_built_linux_tarball_and_python_distributions() -> None:

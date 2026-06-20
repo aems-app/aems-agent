@@ -376,16 +376,15 @@ def test_build_macos_dmg_honors_skip_env(tmp_path: Path, monkeypatch: pytest.Mon
     assert not (tmp_path / "dist" / "AEMS-Agent.dmg").exists()
 
 
-def test_build_macos_dmg_stages_app_launch_agent_and_applications_alias(
+def test_build_macos_dmg_stages_app_launch_helper_and_applications_alias(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """The DMG staging folder must include the app, LaunchAgent, and /Applications link.
+    """The DMG staging folder must include the app, helper, and /Applications link.
 
-    The release docs tell users the DMG contains both ``AEMS Agent.app`` and
-    ``com.aems.agent.plist``. Building the DMG directly from the ``.app``
-    bundle drops the plist on the floor and forces users to hunt for
-    ``/Applications`` in a second Finder window. Regression-guard the
-    drag-to-Applications staging layout.
+    The release docs tell users the DMG contains ``AEMS Agent.app``,
+    ``com.aems.agent.plist``, the first-launch quarantine helper, and the
+    ``/Applications`` alias. Regression-guard the drag-to-Applications
+    staging layout.
     """
     sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "packaging"))
     build = importlib.import_module("build")
@@ -403,6 +402,7 @@ def test_build_macos_dmg_stages_app_launch_agent_and_applications_alias(
         symlink_calls.append((target, link_name))
 
     monkeypatch.setattr(build.os, "symlink", _fake_symlink)
+    monkeypatch.setattr(build, "_create_dmg_with_volume_icon", lambda *_args: False)
     calls: list[list[str]] = []
     monkeypatch.setattr(build, "run", lambda cmd, cwd=None: calls.append(list(cmd)))
 
@@ -415,4 +415,9 @@ def test_build_macos_dmg_stages_app_launch_agent_and_applications_alias(
     assert srcfolder != app_dir, "DMG should be built from a staging folder, not the .app alone"
     assert (srcfolder / "AEMS Agent.app").is_dir()
     assert (srcfolder / "com.aems.agent.plist").is_file()
+    helper = srcfolder / "Open AEMS Agent (first launch).command"
+    assert helper.is_file()
+    helper_text = helper.read_text(encoding="utf-8")
+    assert "xattr -dr com.apple.quarantine" in helper_text
+    assert 'open "$APP"' in helper_text
     assert symlink_calls == [("/Applications", srcfolder / "Applications")]

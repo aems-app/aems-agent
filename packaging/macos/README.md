@@ -19,6 +19,8 @@ every tagged release.
     `NSHighResolutionCapable=true`, `LSUIElement=true`
     (background-only / no Dock entry)
 - `com.aems.agent.plist` — optional LaunchAgent (auto-start at login)
+- `Open AEMS Agent (first launch).command` — double-click helper that removes
+  the browser quarantine flag from `/Applications/AEMS Agent.app` and opens it
 - `Applications` — symlink for the standard drag-to-Applications install flow
 
 ## Code signing
@@ -45,15 +47,23 @@ anchor in Apple's PKI. macOS surfaces this as one of:
 
 **User-facing first-launch flow (must appear in every download surface):**
 
+Preferred free/ad-hoc path:
+
+1. Drag **AEMS Agent** from the mounted DMG to **Applications**.
+2. Double-click **Open AEMS Agent (first launch).command** in the mounted DMG.
+3. The helper removes `com.apple.quarantine` from
+   `/Applications/AEMS Agent.app` and opens the app.
+
+Fallback paths:
+
 The exact path depends on the macOS version. Both paths must be documented;
-right-click → Open is no longer the documented reliable bypass on macOS 15
+right-click -> Open is no longer the documented reliable bypass on macOS 15
 Sequoia.
 
 **On macOS 15 Sequoia and later** — preferred path:
 
-1. Drag **AEMS Agent** from the mounted DMG to **Applications**.
-2. Double-click **AEMS Agent**. Dismiss the warning that appears.
-3. Open **System Settings → Privacy & Security**.
+1. Double-click **AEMS Agent** in Applications. Dismiss the warning that appears.
+2. Open **System Settings -> Privacy & Security**.
 4. Scroll to the **Security** section.
 5. Click **Open / Open Anyway** next to AEMS Agent. Authenticate if prompted.
 6. Launch AEMS Agent again and confirm **Open** in the new dialog.
@@ -65,7 +75,7 @@ appears.
 **On macOS 11 Big Sur through macOS 14 Sonoma:**
 
 1. Drag **AEMS Agent** from the mounted DMG to **Applications**.
-2. Right-click (or Control-click) AEMS Agent → **Open**.
+2. Right-click (or Control-click) AEMS Agent -> **Open**.
 3. Confirm the "from an unidentified developer" warning by clicking
    **Open** again.
 

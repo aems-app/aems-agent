@@ -226,6 +226,10 @@ class TestMacOSSelfUpdate:
         assert "open -a" in script
         # The HTTP response must flush before kill — sleep gate at the top.
         assert "sleep 2" in script
+        # Strip the quarantine xattr ditto carried over so the freshly
+        # self-updated ad-hoc bundle does not re-trigger Gatekeeper's
+        # "damaged / cannot be opened" block on the next manual launch.
+        assert "xattr -dr com.apple.quarantine" in script
 
     def test_build_macos_relaunch_script_quotes_dmg_path_with_spaces(self, tmp_path: Path) -> None:
         """Defends against path-with-spaces shell injection / mis-parsing.

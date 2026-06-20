@@ -357,3 +357,51 @@ class TestPreflightPortCheck:
             "No setsockopt call expected in _preflight_port_or_die — the retry"
             " loop is what closes the race after taskkill /F."
         )
+
+
+class TestSingleInstanceLock:
+    """The single-instance guard must make a duplicate launch a silent no-op.
+
+    Regression for the macOS port-conflict defect: a second AEMS Agent
+    (Finder double-click, launchd respawn, self-update relaunch) used to hit
+    the port preflight and show the scary "port in use by another program,
+    change the port" dialog. The lock now arbitrates *before* the preflight,
+    so the second launch detects the first and exits 0 with no dialog.
+    """
+
+    def teardown_method(self) -> None:
+        # Release any lock the test left held so the next test starts clean.
+        handle = getattr(cli_module, "_single_instance_handle", None)
+        if handle is not None:
+            try:
+                handle.close()
+            finally:
+                cli_module._single_instance_handle = None
+
+    def test_first_acquire_succeeds_second_fails(self, tmp_path: Path) -> None:
+        """The first caller owns the lock; a second concurrent caller does not."""
+        assert cli_module._acquire_single_instance_lock(tmp_path) is True
+        # A second attempt while the first handle is still open (same machine,
+        # different open-file description) must observe the lock as held.
+        assert cli_module._acquire_single_instance_lock(tmp_path) is False
+
+    def test_lock_releases_on_close(self, tmp_path: Path) -> None:
+        """Closing the handle frees the lock so a relaunch can re-acquire it."""
+        assert cli_module._acquire_single_instance_lock(tmp_path) is True
+        handle = cli_module._single_instance_handle
+        assert handle is not None
+        handle.close()
+        cli_module._single_instance_handle = None
+        # The previous owner is gone; a fresh launch acquires cleanly.
+        assert cli_module._acquire_single_instance_lock(tmp_path) is True
+
+    def test_lockfile_error_fails_open(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A lock-file I/O error must never block a legitimate launch."""
+
+        def _boom(*_args: object, **_kwargs: object) -> None:
+            raise OSError("disk gone")
+
+        monkeypatch.setattr("builtins.open", _boom)
+        assert cli_module._acquire_single_instance_lock(tmp_path) is True

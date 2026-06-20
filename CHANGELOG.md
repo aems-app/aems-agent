@@ -2,6 +2,22 @@
 
 All notable changes to `aems-agent` are recorded here. Format follows [Keep a Changelog](https://keepachangelog.com/) and the project uses [SemVer](https://semver.org/).
 
+## 0.4.34 — 2026-06-20
+
+macOS-focused reliability + UX release driven by the Apple tester's "NEW" bug report (port-conflict modal, vanishing pairing PIN, Gatekeeper "damaged"). Pairs with the AEMS web changes that add a "Connected — not paired" badge state so a reachable-but-unpaired agent is never mistaken for "ready to grade".
+
+### Fixed
+
+- **Single-instance guard kills the "change your port" modal.** A real OS lock (`fcntl.flock` on POSIX, `msvcrt.locking` on Windows) on `<config_dir>/agent.lock` is now acquired in `run()` *before* `_preflight_port_or_die`. A duplicate launch — Finder double-click, launchd `KeepAlive` respawn, or the self-update relaunch — detects the held lock and exits 0 **silently** with no dialog, instead of falling into the port-conflict path that told a non-technical macOS user to run `aems-agent run --port <other>`. The genuine-foreign-squatter and already-running messages were also rewritten to drop the CLI-port instruction and the Windows-only "Task Manager" wording. New `TestSingleInstanceLock` suite in `tests/test_cli.py`.
+- **Self-update no longer re-arms Gatekeeper.** The macOS relaunch helper now runs `xattr -dr com.apple.quarantine` on the freshly-replaced `/Applications/AEMS Agent.app` after the `ditto` copy, so a self-updated ad-hoc build does not re-trigger the "damaged / cannot be opened" block on the next manual launch. Harmless once notarized.
+
+### Added
+
+- **Pairing PIN is recoverable and platform-correct.** The tray toast now names the platform-correct paste key (Cmd+V on macOS, Ctrl+V elsewhere) *and* the destination (the AEMS browser tab), and a new **"Copy Pairing PIN"** tray menu item re-surfaces the last PIN after the transient notification fades. Previously the toast hard-coded "Ctrl+V", named no destination, and left no recovery channel once it auto-dismissed.
+- **Free first-launch Gatekeeper helper + branded DMG.** The DMG now ships a double-clickable `Open AEMS Agent (first launch).command` that strips the quarantine flag and opens the app (the documented freeware escape hatch while the build is ad-hoc signed, not notarized), plus a `.VolumeIcon.icns` so the mounted volume shows the AEMS brand icon. README and `packaging/macos/README.md` updated to point users at the helper.
+
+**Not yet exercised on a real Mac** — Gatekeeper dialogs, the `.command` helper, the DMG/Finder icon, the menu-bar PIN recovery, and duplicate-launch behaviour need a macOS verification pass against this build's DMG.
+
 ## 0.4.33 — 2026-06-15
 
 Closes two gaps the v0.4.32 handover explicitly left open: the TOCTOU window between `_preflight_port_or_die` and uvicorn's own bind, and the macOS `.dmg` self-update path that was returning HTTP 501 with a manual-download fallback.

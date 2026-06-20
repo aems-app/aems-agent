@@ -233,9 +233,47 @@ def create_tray(config_dir: Path) -> Any:
         finally:
             _os._exit(0)
 
+    def _paste_keystroke() -> str:
+        """Return the platform-correct paste shortcut label.
+
+        The pairing PIN must be pasted into the AEMS browser tab. macOS uses
+        Cmd+V, not Ctrl+V — hard-coding Ctrl+V told Mac users the wrong key.
+        """
+        return "Cmd+V" if platform.system() == "Darwin" else "Ctrl+V"
+
+    def on_copy_pin(icon: Any, item: Any) -> None:
+        """Re-surface the most recent pairing PIN on demand.
+
+        The pairing toast is a transient OS notification that auto-dismisses
+        within seconds, and on macOS it never said *where* to paste the PIN.
+        This menu item is the persistent recovery channel: it re-copies the
+        last PIN to the clipboard and reminds the user where it goes, so a
+        vanished toast no longer strands the pairing flow.
+        """
+        pin = getattr(icon, "_aems_last_pin", None)
+        try:
+            if not pin:
+                icon.notify(
+                    "No pairing PIN yet. Click Connect in AEMS Settings, then use this menu.",
+                    "AEMS Agent Pairing",
+                )
+                return
+            copied = copy_text_to_clipboard(pin)
+            if copied:
+                icon.notify(
+                    f"Pairing PIN {pin} copied - paste it into the AEMS browser tab "
+                    f"with {_paste_keystroke()}.",
+                    "AEMS Agent Pairing",
+                )
+            else:
+                icon.notify(f"Pairing PIN: {pin}", "AEMS Agent Pairing")
+        except Exception as e:
+            logger.debug("Tray PIN re-surface failed: %s", e)
+
     menu = pystray.Menu(
         pystray.MenuItem("Open Settings", on_open_settings, default=True),
         pystray.MenuItem("Set Storage Folder", on_set_folder),
+        pystray.MenuItem("Copy Pairing PIN", on_copy_pin),
         pystray.MenuItem("Copy Token", on_show_token),
         pystray.Menu.SEPARATOR,
         pystray.MenuItem("Quit", on_quit),
@@ -247,17 +285,31 @@ def create_tray(config_dir: Path) -> Any:
         title="AEMS Local Bridge Agent",
         menu=menu,
     )
+    # Remember the last pairing PIN so "Copy Pairing PIN" can re-surface it
+    # after the transient toast disappears.
+    icon._aems_last_pin = None  # type: ignore[attr-defined]
 
     def _notify_pairing_pin(pin: str, clipboard_ok: bool = False) -> None:
         """Show a tray notification with the pairing PIN.
 
-        The tray toast itself is non-interactive on Windows -- the user
-        cannot click to copy from it.  The agent puts the PIN on the OS
-        clipboard before calling this so the user can simply paste; we
-        mention that here so they know to Ctrl-V.
+        The tray toast itself is non-interactive -- the user cannot click to
+        copy from it -- and on macOS it auto-dismisses within seconds. The
+        agent puts the PIN on the OS clipboard before calling this, and the
+        PIN is also stashed on the icon so the "Copy Pairing PIN" menu item
+        can re-surface it after the toast fades. We name the platform-correct
+        paste key AND the destination (the AEMS browser tab) so the user
+        knows exactly what to do.
         """
+        # Stash for the persistent "Copy Pairing PIN" menu recovery path.
+        icon._aems_last_pin = pin  # type: ignore[attr-defined]
         try:
-            suffix = " (copied to clipboard - paste with Ctrl+V)" if clipboard_ok else ""
+            if clipboard_ok:
+                suffix = (
+                    f" (copied to clipboard - paste into the AEMS browser tab "
+                    f"with {_paste_keystroke()})"
+                )
+            else:
+                suffix = " - type it into the AEMS browser tab"
             icon.notify(f"Pairing PIN: {pin}{suffix}", "AEMS Agent Pairing")
         except Exception as e:
             logger.debug("Tray PIN notification failed: %s", e)

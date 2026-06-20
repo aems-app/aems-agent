@@ -11,6 +11,7 @@ Outputs:
 """
 
 import argparse
+import contextlib
 import os
 import platform
 import shutil
@@ -200,13 +201,45 @@ def _write_macos_launch_agent(path: Path) -> Path:
     return path
 
 
+def _macos_first_launch_command() -> str:
+    """Return the bash for the bundled "first launch" helper script.
+
+    The agent ships ad-hoc signed (no paid Apple Developer ID), so a
+    browser-downloaded copy carries ``com.apple.quarantine`` and macOS 15
+    Sequoia blocks it with "AEMS Agent is damaged / cannot be opened" — and
+    Sequoia no longer offers a right-click->Open bypass for that state. This
+    double-clickable ``.command`` is the documented freeware escape hatch: it
+    strips the quarantine flag and opens the app. (The permanent fix is
+    Developer-ID notarization; this helper is moot once that ships.)
+    """
+    return (
+        "#!/bin/bash\n"
+        "# AEMS Agent - first-launch helper.\n"
+        "# macOS adds a 'quarantine' flag to anything downloaded in a browser.\n"
+        "# Because AEMS Agent uses a free ad-hoc signature (not a paid Apple\n"
+        "# Developer ID), that flag makes Gatekeeper refuse to open it. This\n"
+        "# script removes the flag and opens the app. You only need it once.\n"
+        "set -u\n"
+        'APP="/Applications/AEMS Agent.app"\n'
+        'if [ ! -d "$APP" ]; then\n'
+        '  HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"\n'
+        '  if [ -d "$HERE/AEMS Agent.app" ]; then APP="$HERE/AEMS Agent.app"; fi\n'
+        "fi\n"
+        'xattr -dr com.apple.quarantine "$APP" 2>/dev/null || true\n'
+        'open "$APP"\n'
+    )
+
+
 def _prepare_macos_dmg_staging_dir(app_dir: Path) -> Path:
     """Stage the DMG contents next to the build output.
 
     The DMG should contain the signed app bundle, the optional LaunchAgent
-    plist, and an ``/Applications`` symlink so Finder supports the
-    drag-to-Applications install convention without forcing users to open
-    a second window.
+    plist, an ``/Applications`` symlink so Finder supports the
+    drag-to-Applications install convention, a double-clickable first-launch
+    helper that clears the Gatekeeper quarantine flag (needed only while the
+    build is ad-hoc signed rather than notarized), and a ``.VolumeIcon.icns``
+    so the mounted volume shows the AEMS brand icon instead of the generic
+    disk image.
     """
     stage_dir = BUILD_DIR / "macos-dmg-stage"
     if stage_dir.exists():
@@ -221,6 +254,21 @@ def _prepare_macos_dmg_staging_dir(app_dir: Path) -> Path:
     if applications_link.exists() or applications_link.is_symlink():
         applications_link.unlink()
     os.symlink("/Applications", applications_link, target_is_directory=True)
+
+    # First-launch quarantine-clearing helper (freeware Gatekeeper pattern).
+    helper = stage_dir / "Open AEMS Agent (first launch).command"
+    helper.write_text(_macos_first_launch_command(), encoding="utf-8")
+    os.chmod(helper, 0o755)  # noqa: S103 - user double-clicks this script
+
+    # Volume icon: stage the .icns the spec already generates for the .app.
+    # The custom-icon attribute is applied to the volume in build_macos_dmg.
+    try:
+        from aems_agent.icons import ensure_macos_icns
+
+        ensure_macos_icns(stage_dir / ".VolumeIcon.icns")
+    except Exception as exc:  # noqa: BLE001 - cosmetic; never fail the build
+        print(f"  [WARN] could not stage DMG volume icon: {exc}")
+
     return stage_dir
 
 
@@ -249,6 +297,55 @@ def build_macos_dmg(dist_path: Path) -> Path:
         stage_dir = _prepare_macos_dmg_staging_dir(app_dir)
         if dmg_path.exists():
             dmg_path.unlink()
+        if not _create_dmg_with_volume_icon(stage_dir, app_name, dmg_path):
+            # Fallback: plain read-only image (previous behaviour). Used when
+            # SetFile is unavailable or the volume-icon flow fails for any
+            # reason — the artifact is identical to pre-icon builds.
+            if dmg_path.exists():
+                dmg_path.unlink()
+            run(
+                [
+                    "hdiutil",
+                    "create",
+                    "-volname",
+                    app_name,
+                    "-srcfolder",
+                    str(stage_dir),
+                    "-ov",
+                    str(dmg_path),
+                ]
+            )
+        print(f"  macOS DMG: {dmg_path}")
+
+    return dmg_path
+
+
+def _create_dmg_with_volume_icon(stage_dir: Path, app_name: str, dmg_path: Path) -> bool:
+    """Build the DMG with a branded Finder volume icon. Best-effort.
+
+    ``hdiutil create -srcfolder`` emits a read-only compressed image, and the
+    Finder "custom icon" attribute can only be set on a *mounted, writable*
+    volume via ``SetFile -a C``. So we build a writable (UDRW) image, mount
+    it, set the attribute on the volume that already contains the staged
+    ``.VolumeIcon.icns``, detach, then convert to the final compressed (UDZO)
+    image. Any failure returns ``False`` so the caller falls back to the
+    plain read-only ``hdiutil create`` that shipped before — the volume icon
+    is cosmetic and must never break the release artifact.
+    """
+    setfile = shutil.which("SetFile")
+    if not setfile or not (stage_dir / ".VolumeIcon.icns").exists():
+        return False
+
+    writable = DIST_DIR / "AEMS-Agent-rw.dmg"
+    mount_point = BUILD_DIR / "macos-dmg-mount"
+    try:
+        for stale in (writable,):
+            if stale.exists():
+                stale.unlink()
+        if mount_point.exists():
+            shutil.rmtree(mount_point, ignore_errors=True)
+        mount_point.mkdir(parents=True, exist_ok=True)
+
         run(
             [
                 "hdiutil",
@@ -257,13 +354,32 @@ def build_macos_dmg(dist_path: Path) -> Path:
                 app_name,
                 "-srcfolder",
                 str(stage_dir),
+                "-fs",
+                "HFS+",
+                "-format",
+                "UDRW",
                 "-ov",
-                str(dmg_path),
+                str(writable),
             ]
         )
-        print(f"  macOS DMG: {dmg_path}")
-
-    return dmg_path
+        run(["hdiutil", "attach", str(writable), "-nobrowse", "-mountpoint", str(mount_point)])
+        try:
+            # 'C' = has-custom-icon. The .VolumeIcon.icns at the volume root
+            # supplies the image; this attribute tells Finder to use it.
+            run([setfile, "-a", "C", str(mount_point)])
+        finally:
+            run(["hdiutil", "detach", str(mount_point)])
+        run(["hdiutil", "convert", str(writable), "-format", "UDZO", "-ov", "-o", str(dmg_path)])
+        return True
+    except (subprocess.CalledProcessError, OSError) as exc:
+        print(f"  [WARN] DMG volume-icon flow failed ({exc}); falling back to plain image.")
+        return False
+    finally:
+        if writable.exists():
+            with contextlib.suppress(OSError):
+                writable.unlink()
+        if mount_point.exists():
+            shutil.rmtree(mount_point, ignore_errors=True)
 
 
 def build_linux_packages(dist_path: Path) -> Path:
@@ -286,7 +402,8 @@ def build_linux_packages(dist_path: Path) -> Path:
 
     # Create .desktop entry
     desktop_entry = linux_pkg_dir / "aems-agent.desktop"
-    desktop_entry.write_text("""[Desktop Entry]
+    desktop_entry.write_text(
+        """[Desktop Entry]
 Type=Application
 Name=AEMS Agent
 Comment=AEMS Local Bridge Agent
@@ -296,11 +413,13 @@ Categories=Utility;Education;
 StartupNotify=false
 Terminal=false
 X-GNOME-Autostart-enabled=true
-""")
+"""
+    )
 
     # Create systemd user service
     service_file = linux_pkg_dir / "aems-agent.service"
-    service_file.write_text("""[Unit]
+    service_file.write_text(
+        """[Unit]
 Description=AEMS Local Bridge Agent
 After=network.target
 
@@ -312,10 +431,12 @@ RestartSec=5
 
 [Install]
 WantedBy=default.target
-""")
+"""
+    )
 
     install_script = linux_pkg_dir / "install.sh"
-    install_script.write_text("""#!/usr/bin/env bash
+    install_script.write_text(
+        """#!/usr/bin/env bash
 # AEMS Agent — user-mode Linux installer.
 # Idempotent: re-running upgrades the install in place.
 
@@ -344,7 +465,8 @@ esac
 
 echo "Installed. Try: aems-agent --version"
 echo "Optional autostart: systemctl --user enable --now aems-agent.service"
-""")
+"""
+    )
     os.chmod(install_script, 0o755)  # noqa: S103 - executable script
 
     print(f"  Linux desktop entry:   {desktop_entry}")

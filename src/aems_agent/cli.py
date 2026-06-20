@@ -24,6 +24,11 @@ from fastapi import FastAPI
 
 logger = logging.getLogger(__name__)
 
+# Held for the lifetime of the process once the single-instance lock is
+# acquired. Kept at module scope so the OS lock is not released by garbage
+# collection while the agent is still running.
+_single_instance_handle: Any = None
+
 
 def _ensure_stdio_streams() -> None:
     """Provide non-None stdio streams for windowed PyInstaller bundles.
@@ -169,6 +174,19 @@ def run(
     typer.echo(f"  Token file:   {config_dir / 'auth_token'}")
     typer.echo("")
 
+    # Single-instance guard. If another AEMS Agent already holds the lock,
+    # this launch is a duplicate (Finder double-click, launchd respawn, or a
+    # self-update relaunch). Exit silently with NO dialog — the user already
+    # has a running agent. This runs BEFORE the port preflight so a duplicate
+    # launch can never reach the "port in use / change the port" path that
+    # confused the macOS tester.
+    if not _acquire_single_instance_lock(config_dir):
+        typer.echo(
+            "AEMS Agent is already running on this computer; this duplicate launch will exit."
+        )
+        logger.info("Single-instance lock held by another process; exiting 0 silently.")
+        raise typer.Exit(0)
+
     # Pre-flight port check. uvicorn's bind failure on Windows in --noconsole
     # PyInstaller builds produces no visible output — the user sees the .exe
     # exit silently with no tray icon (Zohar 2026-05-25). Probe first so we
@@ -305,6 +323,76 @@ def _run_with_tray_on_main_thread(
     run_icon_safely(icon, agent_app)
 
 
+def _acquire_single_instance_lock(config_dir: Path) -> bool:
+    """Acquire the agent's exclusive single-instance lock.
+
+    Returns ``True`` when this process now owns the lock (no other agent is
+    running) and ``False`` when another live agent already holds it.
+
+    This is the real single-instance guard. The agent used to rely on the
+    port bind alone to arbitrate duplicate launches, then self-probe
+    ``/status`` to tell "it's my own already-running instance" from "a
+    foreign program squatting the port". On macOS that arbitration is
+    fragile: a Finder double-click, a launchd ``KeepAlive`` respawn, or the
+    self-update relaunch can each spawn a second instance, and the probe can
+    false-negative — landing the user in the scary "port in use by another
+    program, change the port" dialog even though the squatter *is* AEMS
+    Agent. Acquiring an OS lock BEFORE the port preflight makes a duplicate
+    launch a silent no-op instead of a port fight.
+
+    POSIX (macOS/Linux): an advisory ``fcntl.flock`` on
+    ``<config_dir>/agent.lock``. The kernel drops the lock automatically when
+    the owning process exits or the fd closes, so a crashed previous instance
+    never wedges the lock — no stale-pidfile cleanup needed.
+
+    Windows: ``msvcrt.locking`` on the same file. The existing port-bind
+    preflight already arbitrates duplicate launches acceptably on Windows, so
+    if locking is unavailable for any reason we fail open (return ``True``)
+    rather than block startup.
+    """
+    global _single_instance_handle
+    lock_path = config_dir / "agent.lock"
+    if _single_instance_handle is not None and not getattr(
+        _single_instance_handle, "closed", False
+    ):
+        try:
+            if Path(str(_single_instance_handle.name)) == lock_path:
+                return False
+        except (OSError, TypeError, ValueError):
+            return False
+        _single_instance_handle.close()
+        _single_instance_handle = None
+    try:
+        config_dir.mkdir(parents=True, exist_ok=True)
+        handle = open(lock_path, "a+b")  # noqa: SIM115 — held for process lifetime
+    except OSError as exc:
+        # Never let a lock-file error block a legitimate launch.
+        logger.warning("Single-instance lock unavailable (%s); continuing.", exc)
+        return True
+
+    try:
+        if sys.platform == "win32":
+            import msvcrt
+
+            handle.seek(0)
+            msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
+        else:
+            import fcntl
+
+            fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        # Lock is already held by another live agent process.
+        handle.close()
+        return False
+    except Exception as exc:  # noqa: BLE001 — msvcrt/fcntl unavailable: fail open
+        logger.warning("Single-instance locking not enforced (%s); continuing.", exc)
+        _single_instance_handle = handle
+        return True
+
+    _single_instance_handle = handle
+    return True
+
+
 def _preflight_port_or_die(host: str, port: int) -> Any:
     """Verify the agent can bind ``port`` before uvicorn tries.
 
@@ -401,14 +489,15 @@ def _preflight_port_or_die(host: str, port: int) -> Any:
 
     msg = (
         "Another AEMS Agent is already running on this computer.\n\n"
-        "Look for an existing tray icon, or stop the previous agent process\n"
-        "via Task Manager (search 'aems-agent') before launching again."
+        "Look for the existing AEMS Agent icon in your menu bar or system\n"
+        "tray — you do not need to start it again."
         if already_aems
         else (
-            f"AEMS Agent cannot start: port {port} is already in use by\n"
-            "another program on this computer.\n\n"
-            "Stop the process holding the port, or change the agent's port\n"
-            "via 'aems-agent run --port <other>'."
+            f"AEMS Agent could not start because port {port} is already\n"
+            "in use by another program on this computer.\n\n"
+            "This is usually temporary - quit other apps that might use this\n"
+            "port, then open AEMS Agent again. If it keeps happening, restart\n"
+            "your computer or contact support@aems.app."
         )
     )
     logger.error("Preflight failed after retries: %s (last bind error: %s)", msg, bind_err)
