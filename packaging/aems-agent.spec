@@ -198,5 +198,22 @@ if sys.platform == 'darwin':
             # contract.
             'LSUIElement': True,
             'NSHighResolutionCapable': True,
+            # Register the custom URL scheme so the AEMS web app's "Launch
+            # agent" button (which fires `aems-agent://launch` via a hidden
+            # iframe) can ask macOS Launch Services to start the installed
+            # agent. Without this key the scheme resolves to nothing on
+            # macOS, the iframe navigation is a silent no-op, and the button
+            # just greys-then-reverts while the agent never starts. The
+            # Windows installer registers the same scheme via the registry
+            # (packaging/windows/installer.nsi); this is the macOS equivalent.
+            # argv_emulation=False, so macOS delivers the URL via Apple Event
+            # rather than argv — a fresh launch lands in launcher.py with a
+            # bare argv and boots `run --tray` (see launcher._is_frozen_macos_finder_launch).
+            'CFBundleURLTypes': [
+                {
+                    'CFBundleURLName': 'com.aems.agent',
+                    'CFBundleURLSchemes': ['aems-agent'],
+                },
+            ],
         },
     )

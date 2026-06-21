@@ -56,3 +56,77 @@ def test_open_folder_picker_persists_selected_windows_path(
     tray._open_folder_picker(config_dir)
 
     assert load_config(config_dir).storage_path == selected
+
+
+def test_pick_folder_macos_reads_selected_path_from_osascript(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    """The macOS picker must run osascript out-of-process and return the path."""
+    from aems_agent import tray
+
+    selected = str((tmp_path / "Exam Storage").resolve())
+    captured: dict[str, object] = {}
+
+    def fake_run(argv, **kwargs):  # type: ignore[no-untyped-def]
+        captured["argv"] = argv
+        return SimpleNamespace(returncode=0, stdout=selected + "\n", stderr="")
+
+    monkeypatch.setattr(tray.subprocess, "run", fake_run)
+
+    result = tray._pick_folder_macos()
+
+    assert result == selected
+    argv = captured["argv"]
+    assert isinstance(argv, list)
+    # Must invoke the native chooser via osascript, never Tk on the Cocoa
+    # main thread (that aborts the whole agent process).
+    assert str(argv[0]).endswith("osascript")
+    assert any("choose folder" in str(part) for part in argv)
+
+
+def test_pick_folder_macos_returns_none_on_cancel(
+    monkeypatch,
+) -> None:
+    """User cancelling the dialog (osascript exit -128/non-zero) yields None."""
+    from aems_agent import tray
+
+    def fake_run(argv, **kwargs):  # type: ignore[no-untyped-def]
+        return SimpleNamespace(returncode=1, stdout="", stderr="User canceled. (-128)")
+
+    monkeypatch.setattr(tray.subprocess, "run", fake_run)
+
+    assert tray._pick_folder_macos() is None
+
+
+def test_open_folder_picker_uses_osascript_on_macos_never_tk(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    """On macOS the picker MUST go through osascript, never Tk.
+
+    Regression guard for the reported defect: "Set Storage Folder" from the
+    menu bar made the agent report "Installed - not running". Root cause was
+    ``_pick_folder_tk`` constructing a Tk root on the pystray Cocoa main
+    thread, which aborts the process (taking the HTTP server down with it).
+    """
+    from aems_agent import tray
+
+    config_dir = tmp_path / "config"
+    config_dir.mkdir()
+    save_config(
+        AgentConfig(storage_path=None, port=61234, host="127.0.0.1"),
+        config_dir,
+    )
+    selected = str((tmp_path / "Mac Storage").resolve())
+
+    def _tk_must_not_run() -> str:
+        raise AssertionError("_pick_folder_tk must never be called on macOS")
+
+    monkeypatch.setattr(tray.platform, "system", lambda: "Darwin")
+    monkeypatch.setattr(tray, "_pick_folder_tk", _tk_must_not_run)
+    monkeypatch.setattr(tray, "_pick_folder_macos", lambda: selected)
+
+    tray._open_folder_picker(config_dir)
+
+    assert load_config(config_dir).storage_path == selected

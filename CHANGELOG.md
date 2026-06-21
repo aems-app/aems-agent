@@ -2,6 +2,21 @@
 
 All notable changes to `aems-agent` are recorded here. Format follows [Keep a Changelog](https://keepachangelog.com/) and the project uses [SemVer](https://semver.org/).
 
+## 0.4.35 — 2026-06-21
+
+Follow-up to the v0.4.34 macOS pass: the Apple tester's "NEW" report showed v0.4.34 surfaced the `Connected — not paired` badge correctly but exposed a complete macOS **dead-end loop** — you can't pair without a storage folder, setting a storage folder from the menu bar crashed the agent, and the web "Launch agent" button couldn't restart it. This release breaks the loop. Pairs with AEMS web changes (persistent storage-folder guidance, bulletproof pairing lock, launch-failure feedback).
+
+### Fixed
+
+- **"Set Storage Folder" no longer crashes the agent on macOS.** The tray picker used a Tkinter dialog (`_pick_folder_tk`) for every non-Windows platform. On macOS the tray runs on the AppKit main thread that `NSApplication` (pystray's Cocoa backend) already owns; constructing a `Tk()` root there installs a *second* Cocoa event loop on the same thread and aborts the whole process — and because the HTTP server is a background thread, it dies too, so the AEMS badge flipped to "Installed — not running". macOS now uses a new out-of-process `_pick_folder_macos()` that runs the native `osascript … choose folder` chooser in a separate process; Tk is never touched on Darwin. New regression tests in `tests/test_tray_folder_picker.py` (osascript invocation, user-cancel → `None`, and a guard that `_open_folder_picker` never calls Tk on macOS).
+- **Pairing recovers instead of jamming on "Pairing already in progress".** `POST /pair/initiate` now *supersedes* a live challenge when the re-initiate comes from the **same** browser origin (the user simply clicked Connect again — after setting a storage folder, or because the first PIN toast vanished). Previously any retry within the 120s TTL got a 409 "Pairing already in progress, wait…" and the user was stranded for the full window. A **different** origin is still rejected with 409, preserving the anti-hijack guarantee. New tests `test_pair_initiate_supersedes_same_origin_challenge` and `test_pair_initiate_rejects_different_origin_while_active` in `tests/test_routes.py`.
+
+### Added
+
+- **macOS registers the `aems-agent://` URL scheme so "Launch agent" works.** The web app's "Launch agent" button fires `aems-agent://launch` via a hidden iframe to ask the OS to start the installed agent. Windows registers that scheme in the NSIS installer, but the macOS bundle never declared it, so the click was a silent no-op (grey-then-blue, agent never started). The PyInstaller spec now adds `CFBundleURLTypes` (`CFBundleURLSchemes: ['aems-agent']`) to the `.app` Info.plist. Because `argv_emulation=False`, macOS delivers the URL via an Apple Event and the bundle boots `run --tray`; `launcher.py` also gains `_macos_launch_uri_arg()` as a belt-and-suspenders guard for configs that pass the URL through `argv`. New tests `test_launcher_handles_aems_agent_url_scheme_launch` and `test_macos_bundle_registers_aems_agent_url_scheme`.
+
+**Not yet exercised on a real Mac** — the osascript folder chooser, the `aems-agent://` Launch Services registration, and the full pair-after-setting-a-folder flow are unit-tested but need a macOS verification pass against this build's DMG (Launch Services must index the new bundle once after install for the URL scheme to resolve).
+
 ## 0.4.34 — 2026-06-20
 
 macOS-focused reliability + UX release driven by the Apple tester's "NEW" bug report (port-conflict modal, vanishing pairing PIN, Gatekeeper "damaged"). Pairs with the AEMS web changes that add a "Connected — not paired" badge state so a reachable-but-unpaired agent is never mistaken for "ready to grade".

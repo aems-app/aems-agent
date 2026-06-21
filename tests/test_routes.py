@@ -602,6 +602,65 @@ class TestPairing:
         assert "storage_path" in resp.json()
         assert resp.json()["storage_path"] is None
 
+    def test_pair_initiate_supersedes_same_origin_challenge(self, agent_client: Any) -> None:
+        """Clicking Connect again from the SAME origin gets a fresh challenge.
+
+        Regression guard: the macOS tester's first pairing attempt aborted
+        (no storage folder), leaving a live 120s challenge on the agent. Every
+        retry then hit a 409 "Pairing already in progress, wait..." wall and
+        never recovered. A same-origin re-initiate must supersede the stale
+        challenge with a new PIN instead.
+        """
+        _skip_if_no_fastapi()
+        _reset_pairing_rate_limiters()
+        from aems_agent import routes
+
+        routes._pairing_challenge = None
+        origin = "http://127.0.0.1:8080"
+
+        first = agent_client.post(
+            "/pair/initiate", json={"origin": origin}, headers={"Origin": origin}
+        )
+        assert first.status_code == 200
+        first_id = first.json()["challenge_id"]
+
+        second = agent_client.post(
+            "/pair/initiate", json={"origin": origin}, headers={"Origin": origin}
+        )
+        assert second.status_code == 200
+        second_id = second.json()["challenge_id"]
+        assert second_id != first_id
+        # The active challenge is now the fresh one; the old id is dead.
+        assert routes._pairing_challenge is not None
+        assert routes._pairing_challenge["challenge_id"] == second_id
+
+    def test_pair_initiate_rejects_different_origin_while_active(self, agent_client: Any) -> None:
+        """A DIFFERENT origin still gets 409 while a challenge is live.
+
+        The same-origin supersede must not weaken the anti-hijack guarantee:
+        a second browser/origin cannot race in and replace an in-flight
+        pairing challenge.
+        """
+        _skip_if_no_fastapi()
+        _reset_pairing_rate_limiters()
+        from aems_agent import routes
+
+        routes._pairing_challenge = None
+        origin_a = "http://127.0.0.1:8080"
+        origin_b = "https://example.com"
+
+        first = agent_client.post(
+            "/pair/initiate", json={"origin": origin_a}, headers={"Origin": origin_a}
+        )
+        assert first.status_code == 200
+
+        second = agent_client.post(
+            "/pair/initiate", json={"origin": origin_b}, headers={"Origin": origin_b}
+        )
+        assert second.status_code == 409
+        assert second.json()["detail"] == "Pairing already in progress"
+        assert "expires_in" in second.json()
+
     def test_pair_rejects_origin_mismatch(self, agent_client: Any) -> None:
         _skip_if_no_fastapi()
         _reset_pairing_rate_limiters()

@@ -1747,15 +1747,26 @@ async def pair_initiate(
     pin = f"{random.SystemRandom().randint(0, 999999):06d}"
 
     async with _pairing_lock:
-        if _pairing_challenge and now <= float(_pairing_challenge["expires_at"]):
-            expires_in = max(1, int(float(_pairing_challenge["expires_at"]) - now))
-            # FastAPI accepts a JSONResponse here at runtime; the declared
-            # return type is kept as Dict[str, Any] so the OpenAPI/Pydantic
-            # response_model inference for the success path stays clean.
-            return JSONResponse(  # type: ignore[return-value]
-                status_code=409,
-                content={"detail": "Pairing already in progress", "expires_in": expires_in},
-            )
+        existing = _pairing_challenge
+        if existing and now <= float(existing["expires_at"]):
+            # A live challenge already exists. If it belongs to the SAME
+            # browser origin, the user simply clicked Connect again — e.g.
+            # after setting a storage folder, or because the first PIN toast
+            # vanished before they could use it. Supersede the old challenge
+            # with a fresh PIN instead of stranding them behind a 409
+            # "Pairing already in progress" wall for the full 120s TTL (the
+            # macOS tester's "tells me to wait, then nothing happens" loop).
+            # Only a DIFFERENT origin is rejected, which preserves the
+            # anti-hijack guarantee that two pages can't race to pair.
+            if not secrets.compare_digest(str(existing.get("origin") or ""), origin_header):
+                expires_in = max(1, int(float(existing["expires_at"]) - now))
+                # FastAPI accepts a JSONResponse here at runtime; the declared
+                # return type is kept as Dict[str, Any] so the OpenAPI/Pydantic
+                # response_model inference for the success path stays clean.
+                return JSONResponse(  # type: ignore[return-value]
+                    status_code=409,
+                    content={"detail": "Pairing already in progress", "expires_in": expires_in},
+                )
         _pairing_challenge = {
             "challenge_id": challenge_id,
             "origin": origin_header,

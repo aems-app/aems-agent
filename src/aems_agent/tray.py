@@ -116,8 +116,54 @@ try {
     return completed.stdout.strip()
 
 
+def _pick_folder_macos() -> Optional[str]:
+    """Native macOS folder picker via ``osascript`` (out-of-process).
+
+    DO NOT use ``_pick_folder_tk`` on macOS. On Darwin the tray runs on the
+    AppKit main thread that ``NSApplication`` (pystray's Cocoa backend)
+    already owns; constructing a Tk root there initialises a *second* Cocoa
+    event loop on the same thread, which aborts the whole process. When the
+    process dies the agent's HTTP server (a background thread) dies with it,
+    the ``/status`` probe stops answering, and the AEMS web badge flips to
+    "Installed — not running" — exactly the reported "Set Storage Folder
+    breaks the agent" symptom. ``osascript`` runs the native chooser in a
+    separate process, off our main thread, so it can never crash the agent.
+    """
+    # ``choose folder`` returns an alias; ``POSIX path of`` yields the path.
+    script = 'POSIX path of (choose folder with prompt "Select AEMS Exam Storage Folder")'
+    try:
+        completed = subprocess.run(
+            ["/usr/bin/osascript", "-e", script],
+            capture_output=True,
+            text=True,
+            timeout=300,
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError) as exc:
+        logger.warning("macOS folder picker process failed: %s", exc)
+        return None
+
+    if completed.returncode != 0:
+        # A non-zero exit is the normal "user clicked Cancel" path
+        # (AppleScript error -128) as well as any genuine error; either way
+        # there is no folder to set. We deliberately do NOT fall back to Tk
+        # here — that is the crash this function exists to avoid.
+        logger.debug(
+            "macOS folder picker exited with %s: %s",
+            completed.returncode,
+            (completed.stderr or "").strip(),
+        )
+        return None
+
+    return completed.stdout.strip() or None
+
+
 def _pick_folder_tk() -> Optional[str]:
-    """Fallback cross-platform folder picker."""
+    """Fallback cross-platform folder picker.
+
+    NOTE: never call this on macOS — see ``_pick_folder_macos`` for why Tk on
+    the Cocoa main thread aborts the process.
+    """
     import tkinter as tk
     from tkinter import filedialog
 
@@ -142,6 +188,10 @@ def _open_folder_picker(config_dir: Path) -> None:
             folder = _pick_folder_windows()
             if folder is None:
                 folder = _pick_folder_tk()
+        elif platform.system() == "Darwin":
+            # macOS MUST use the out-of-process osascript chooser; Tk on the
+            # Cocoa main thread crashes the agent (see _pick_folder_macos).
+            folder = _pick_folder_macos()
         else:
             folder = _pick_folder_tk()
 

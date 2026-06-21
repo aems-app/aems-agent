@@ -244,6 +244,60 @@ def test_launcher_defaults_finder_double_click_to_run_tray(
     assert launcher._is_frozen_macos_finder_launch() is False
 
 
+def test_launcher_handles_aems_agent_url_scheme_launch(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A frozen macOS launch carrying an ``aems-agent://`` URL boots run --tray.
+
+    The web app's "Launch agent" button fires ``aems-agent://launch`` to ask
+    macOS to start the installed agent. With ``argv_emulation=False`` the URL
+    arrives as an Apple Event (bare argv -> handled by the Finder-launch
+    branch). This guards the belt-and-suspenders path where the URL lands in
+    argv instead: ``_macos_launch_uri_arg`` must detect it so the launcher can
+    boot the tray instead of passing the URL to Typer as a bogus subcommand.
+    """
+    import importlib
+    import sys as _sys
+
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "packaging"))
+    launcher = importlib.import_module("launcher")
+
+    # Frozen darwin launch with the custom-scheme URL in argv.
+    monkeypatch.setattr(_sys, "frozen", True, raising=False)
+    monkeypatch.setattr(launcher.platform, "system", lambda: "Darwin")
+    monkeypatch.setattr(
+        _sys,
+        "argv",
+        ["/Applications/AEMS Agent.app/Contents/MacOS/aems-agent", "aems-agent://launch"],
+    )
+    assert launcher._macos_launch_uri_arg() == "aems-agent://launch"
+
+    # No URL present -> nothing to extract.
+    monkeypatch.setattr(_sys, "argv", ["aems-agent", "run", "--tray"])
+    assert launcher._macos_launch_uri_arg() is None
+
+    # Non-darwin frozen launch with a URL: not our concern (Windows registers
+    # the scheme via the registry and passes the URL to `run` explicitly).
+    monkeypatch.setattr(launcher.platform, "system", lambda: "Windows")
+    monkeypatch.setattr(_sys, "argv", ["aems-agent.exe", "aems-agent://launch"])
+    assert launcher._macos_launch_uri_arg() is None
+
+
+def test_macos_bundle_registers_aems_agent_url_scheme() -> None:
+    """The PyInstaller spec must declare CFBundleURLTypes for aems-agent://.
+
+    Without this key macOS Launch Services has no handler for the scheme, so
+    the web "Launch agent" button (which fires aems-agent://launch) is a
+    silent no-op on macOS. Guards against the key being dropped on a spec edit.
+    """
+    spec = (Path(__file__).resolve().parents[1] / "packaging" / "aems-agent.spec").read_text(
+        encoding="utf-8"
+    )
+    assert "CFBundleURLTypes" in spec
+    assert "CFBundleURLSchemes" in spec
+    assert "'aems-agent'" in spec or '"aems-agent"' in spec
+
+
 def test_workflow_smoke_tests_frozen_macos_app_before_signing() -> None:
     """The macOS release job should execute the frozen app before signing/DMG steps.
 
