@@ -11,11 +11,14 @@ The route layer (routes.py) handles HTTP concerns; this module handles:
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
+import ipaddress
 import logging
 import os
 import re
 import secrets
+import socket
 import tempfile
 import time
 from contextlib import suppress
@@ -39,6 +42,89 @@ SUPPORTED_MANIFEST_VERSION = 1
 
 # Cap for a single submission download (matches the agent's upload cap).
 MAX_DOWNLOAD_BYTES = 200 * 1024 * 1024
+
+# Canvas file endpoints typically 302 once to a pre-signed CDN/S3 URL; a long
+# redirect chain is abnormal and bounding it limits redirect-based abuse.
+MAX_DOWNLOAD_REDIRECTS = 5
+
+
+class UnsafeRedirectError(Exception):
+    """Raised when a Canvas download tries to redirect to a disallowed target."""
+
+
+def _is_public_ip(addr: ipaddress.IPv4Address | ipaddress.IPv6Address) -> bool:
+    """True only for ordinary public/global addresses (SSRF guard)."""
+    # ``not private`` is not the same as globally reachable: for example,
+    # 100.64.0.0/10 shared-address space is neither private nor global. Use
+    # ipaddress' global classification, with multicast explicitly excluded
+    # because it is marked global by the stdlib but is not a safe HTTP target.
+    return addr.is_global and not addr.is_multicast
+
+
+async def _is_safe_redirect_target(url: httpx.URL) -> bool:
+    """Return True if *url* is HTTPS and every resolved IP is a public address.
+
+    A Canvas download legitimately redirects to a pre-signed CDN/S3 URL on a
+    *different* public host, so we cannot pin to the Canvas host — but we can
+    still refuse redirects to a non-HTTPS scheme or to a loopback / private /
+    link-local / reserved address (e.g. the cloud metadata endpoint
+    169.254.169.254). Resolution is best-effort; a residual DNS-rebinding TOCTOU
+    remains between this check and httpx's own connect.
+    """
+    if url.scheme != "https":
+        return False
+    host = url.host
+    if not host:
+        return False
+    # Literal IP host: validate directly, no DNS.
+    try:
+        return _is_public_ip(ipaddress.ip_address(host))
+    except ValueError:
+        pass
+    loop = asyncio.get_running_loop()
+    try:
+        infos = await loop.getaddrinfo(host, url.port or 443, type=socket.SOCK_STREAM)
+    except socket.gaierror:
+        return False
+    if not infos:
+        return False
+    for info in infos:
+        try:
+            addr = ipaddress.ip_address(info[4][0])
+        except ValueError:
+            return False
+        if not _is_public_ip(addr):
+            return False
+    return True
+
+
+async def _redirect_ssrf_guard(response: httpx.Response) -> None:
+    """httpx ``response`` event hook that vetoes unsafe redirect targets.
+
+    Fires for every response in a redirect chain. For a redirect it resolves the
+    Location and raises — aborting the chain before httpx connects to the next
+    hop — when the target is not a public HTTPS address. The agent's Canvas
+    bearer token is not exposed: httpx (>=0.25) strips the Authorization header
+    on cross-host redirects.
+    """
+    if not response.is_redirect:
+        return
+    location = response.headers.get("location")
+    if not location:
+        return
+    target = response.url.join(location)
+    if not await _is_safe_redirect_target(target):
+        raise UnsafeRedirectError(
+            f"Blocked Canvas download redirect to {target.scheme}://{target.host}"
+        )
+
+
+def _new_download_client() -> httpx.AsyncClient:
+    """Create the httpx client used for Canvas downloads, with the SSRF guard."""
+    return httpx.AsyncClient(
+        event_hooks={"response": [_redirect_ssrf_guard]},
+        max_redirects=MAX_DOWNLOAD_REDIRECTS,
+    )
 
 
 def _file_sha256(path: Path) -> str:
@@ -457,7 +543,7 @@ async def run_download_job(
 
         owns_client = http_client is None
         if owns_client:
-            http_client = httpx.AsyncClient()
+            http_client = _new_download_client()
 
         assert http_client is not None  # narrowing for mypy
         try:

@@ -25,12 +25,112 @@ from fastapi.responses import JSONResponse
 
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.responses import Response as StarletteResponse
+from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from .config import AGENT_VERSION, API_VERSION, ensure_auth_token, get_config_dir, load_config
 from .crypto import ensure_keypair
 from .routes import router, set_agent_globals
 
 logger = logging.getLogger(__name__)
+
+# Request body size caps (Fix: pre-auth unbounded body buffering).
+#
+# FastAPI buffers the entire request body via ``await request.body()`` while
+# solving dependencies for any endpoint that declares a Pydantic model body —
+# and it does so BEFORE the route's auth / rate-limit dependencies run. The
+# unauthenticated ``/pair/initiate`` and ``/pair/complete`` endpoints are
+# model-bound, so without a cap a page that can reach ``127.0.0.1`` could
+# ``fetch()`` an arbitrarily large body and force unbounded memory use before
+# any 403/429. The streaming caps in routes.py only protect the raw-``Request``
+# endpoints. This middleware bounds EVERY request body centrally; the large PDF
+# uploads under ``/files/`` keep their own 200 MB streaming cap in routes.py and
+# get a slightly higher backstop here.
+_JSON_BODY_LIMIT_BYTES = 16 * 1024 * 1024  # 16 MiB — JSON / Pydantic-model bodies
+_UPLOAD_BODY_LIMIT_BYTES = 210 * 1024 * 1024  # 210 MiB — backstop above the 200 MB PDF cap
+
+
+class _RequestBodyTooLarge(Exception):
+    """Raised by the body-size middleware once a request body exceeds its cap."""
+
+
+def _body_limit_for(scope: Scope) -> int:
+    """Return the body-size cap for a request scope.
+
+    Only the PDF-upload PUT/POST endpoints under ``/files/`` legitimately carry
+    bodies larger than a few MB; everything else (JSON, pairing, manifest,
+    self-update) is bounded to the smaller JSON cap.
+    """
+    method = scope.get("method", "")
+    path = scope.get("path", "")
+    if method in ("PUT", "POST") and path.startswith("/files/"):
+        return _UPLOAD_BODY_LIMIT_BYTES
+    return _JSON_BODY_LIMIT_BYTES
+
+
+class _BodySizeLimitMiddleware:
+    """Pure-ASGI middleware enforcing a per-request body-size cap.
+
+    Two enforcement points:
+      1. A declared ``Content-Length`` over the cap is rejected with a 413
+         before the application (and its auth/validation) runs at all. This
+         covers the browser-reachable case — ``fetch()`` always sets
+         ``Content-Length``.
+      2. For chunked / unset-``Content-Length`` bodies, the wrapped ``receive``
+         counts bytes as they arrive and raises ``_RequestBodyTooLarge`` once
+         the cap is crossed, so the body is never fully buffered. The registered
+         exception handler turns that into a clean 413.
+    """
+
+    def __init__(self, app: ASGIApp) -> None:
+        self.app = app
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope.get("type") != "http":
+            await self.app(scope, receive, send)
+            return
+
+        max_bytes = _body_limit_for(scope)
+
+        for name, value in scope.get("headers") or []:
+            if name.lower() == b"content-length":
+                try:
+                    declared = int(value)
+                except ValueError:
+                    break
+                if declared > max_bytes:
+                    await self._reject(send)
+                    return
+                break
+
+        received = 0
+
+        async def limited_receive() -> Message:
+            nonlocal received
+            message = await receive()
+            if message.get("type") == "http.request":
+                received += len(message.get("body", b""))
+                if received > max_bytes:
+                    raise _RequestBodyTooLarge()
+            return message
+
+        await self.app(scope, limited_receive, send)
+
+    @staticmethod
+    async def _reject(send: Send) -> None:
+        body = b'{"detail":"Request body too large"}'
+        await send(
+            {
+                "type": "http.response.start",
+                "status": 413,
+                "headers": [
+                    (b"content-type", b"application/json"),
+                    (b"content-length", str(len(body)).encode("ascii")),
+                    (b"x-aems-agent-version", AGENT_VERSION.encode("ascii")),
+                    (b"x-aems-api-version", API_VERSION.encode("ascii")),
+                ],
+            }
+        )
+        await send({"type": "http.response.body", "body": body})
 
 
 def _setup_logging(config_dir: Path) -> None:
@@ -164,6 +264,10 @@ def create_app(
             },
         )
 
+    @app.exception_handler(_RequestBodyTooLarge)
+    async def _body_too_large_handler(request: Request, exc: _RequestBodyTooLarge) -> JSONResponse:
+        return JSONResponse(status_code=413, content={"detail": "Request body too large"})
+
     # Version header middleware — inject agent/API version on every response
     # and log warning if client version is incompatible.
     class _VersionHeaderMiddleware(BaseHTTPMiddleware):
@@ -242,6 +346,11 @@ def create_app(
             return response
 
     app.add_middleware(_VersionHeaderMiddleware)
+
+    # Body-size cap. Direct 413 responses still flow back out through CORS/LNA
+    # and include version headers themselves, while the cap intercepts the body
+    # before any route buffers it.
+    app.add_middleware(_BodySizeLimitMiddleware)  # type: ignore[arg-type]
 
     # CORS middleware for browser access.
     # all_origins is a mutable list — routes.py appends to it after pairing,

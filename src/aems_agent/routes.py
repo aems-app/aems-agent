@@ -127,6 +127,23 @@ def _verify_token(authorization: Optional[str] = Header(default=None)) -> str:
     return token
 
 
+def _ct_eq(a: str, b: str) -> bool:
+    """Constant-time string compare that is safe for non-ASCII input.
+
+    ``secrets.compare_digest`` raises ``TypeError`` when handed a ``str`` with
+    non-ASCII code points; encode to bytes first (mirroring ``_verify_token``).
+    Use ``surrogatepass`` so even a JSON string containing a lone surrogate
+    cannot raise ``UnicodeEncodeError`` before the request is rejected.
+    Without this a hostile Unicode origin / challenge_id — or a PIN of
+    Arabic-Indic digits, which ``\\d`` still matches — would reach
+    ``compare_digest`` and surface as a 500 instead of a clean 403.
+    """
+    return secrets.compare_digest(
+        a.encode("utf-8", "surrogatepass"),
+        b.encode("utf-8", "surrogatepass"),
+    )
+
+
 def _check_rate_limit(request: Request) -> None:
     """FastAPI dependency to enforce rate limiting."""
     client_ip = request.client.host if request.client else "unknown"
@@ -412,6 +429,20 @@ class SelfUpdateRequest(BaseModel):
         return v
 
 
+def _version_release_tuple(version: str) -> tuple[int, int, int]:
+    """Return the ``(major, minor, patch)`` release tuple of a semver string.
+
+    Pre-release / build metadata after the patch number is ignored for ordering
+    — it only needs to be coarse enough to block a downgrade to an older
+    published release. Returns ``(0, 0, 0)`` if the version cannot be parsed,
+    which makes an unparseable current version fail open (no false block).
+    """
+    match = re.match(r"^(\d+)\.(\d+)\.(\d+)", version.lstrip("vV"))
+    if not match:
+        return (0, 0, 0)
+    return (int(match.group(1)), int(match.group(2)), int(match.group(3)))
+
+
 def _fetch_text(url: str, timeout: float = 30.0) -> str:
     """HTTP GET → text. Kept as a free function so tests can monkeypatch."""
     import urllib.request
@@ -604,6 +635,26 @@ async def self_update(
     process shortly after the response flushes.
     """
     version = payload.version
+
+    # Downgrade floor: refuse to "update" to an older release than the one
+    # running. The SHA-256 manifest check only proves the asset is an authentic
+    # published artifact — it does NOT stop a paired caller from rolling the
+    # agent back to an older, possibly-vulnerable release. Same version is still
+    # allowed (a same-version /S reinstall is a supported repair path); only a
+    # strictly-lower (major, minor, patch) is rejected.
+    if _version_release_tuple(version) < _version_release_tuple(AGENT_VERSION):
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "code": "downgrade_blocked",
+                "requested": version,
+                "current": AGENT_VERSION,
+                "message": (
+                    f"Refusing to downgrade from {AGENT_VERSION} to {version}. "
+                    "Self-update only moves forward."
+                ),
+            },
+        )
 
     asset_name = _SELF_UPDATE_ASSET_BY_PLATFORM.get(sys.platform)
     if asset_name is None:
@@ -1711,7 +1762,10 @@ class PairCompleteRequest(BaseModel):
 
     challenge_id: str = Field(..., description="Challenge ID from initiate step")
     origin: str = Field(..., description="Browser origin requesting pairing")
-    pin: str = Field(..., min_length=6, max_length=6, pattern=r"^\d{6}$")
+    # ``[0-9]`` not ``\d``: Python's ``\d`` matches Unicode decimal digits
+    # (e.g. Arabic-Indic ٠-٩), which would pass validation and then raise a
+    # TypeError inside secrets.compare_digest. Restrict to ASCII digits.
+    pin: str = Field(..., min_length=6, max_length=6, pattern=r"^[0-9]{6}$")
 
 
 @router.post("/pair/initiate")
@@ -1739,7 +1793,7 @@ async def pair_initiate(
     origin_body = _normalize_origin(body.origin)
     if not origin_header or not origin_body:
         raise HTTPException(status_code=400, detail="Invalid origin")
-    if not secrets.compare_digest(origin_header, origin_body):
+    if not _ct_eq(origin_header, origin_body):
         raise HTTPException(status_code=403, detail="Origin header mismatch")
 
     config = _get_config()
@@ -1758,7 +1812,7 @@ async def pair_initiate(
             # macOS tester's "tells me to wait, then nothing happens" loop).
             # Only a DIFFERENT origin is rejected, which preserves the
             # anti-hijack guarantee that two pages can't race to pair.
-            if not secrets.compare_digest(str(existing.get("origin") or ""), origin_header):
+            if not _ct_eq(str(existing.get("origin") or ""), origin_header):
                 expires_in = max(1, int(float(existing["expires_at"]) - now))
                 # FastAPI accepts a JSONResponse here at runtime; the declared
                 # return type is kept as Dict[str, Any] so the OpenAPI/Pydantic
@@ -1820,7 +1874,7 @@ async def pair_complete(
     origin_body = _normalize_origin(body.origin)
     if not origin_header or not origin_body:
         raise HTTPException(status_code=403, detail=_PAIRING_FAILURE_DETAIL)
-    if not secrets.compare_digest(origin_header, origin_body):
+    if not _ct_eq(origin_header, origin_body):
         raise HTTPException(status_code=403, detail=_PAIRING_FAILURE_DETAIL)
 
     async with _pairing_lock:
@@ -1834,16 +1888,16 @@ async def pair_complete(
             raise HTTPException(status_code=410, detail="Pairing challenge expired")
 
         # Validate challenge ID (constant-time comparison)
-        if not secrets.compare_digest(body.challenge_id, _pairing_challenge["challenge_id"]):
+        if not _ct_eq(body.challenge_id, _pairing_challenge["challenge_id"]):
             raise HTTPException(status_code=403, detail=_PAIRING_FAILURE_DETAIL)
 
         # Bind completion to the same browser origin that initiated pairing.
         expected_origin = str(_pairing_challenge.get("origin") or "")
-        if not secrets.compare_digest(origin_header, expected_origin):
+        if not _ct_eq(origin_header, expected_origin):
             raise HTTPException(status_code=403, detail=_PAIRING_FAILURE_DETAIL)
 
         # Validate PIN (constant-time comparison)
-        if not secrets.compare_digest(body.pin, _pairing_challenge["pin"]):
+        if not _ct_eq(body.pin, _pairing_challenge["pin"]):
             _pairing_challenge = None
             if _record_failed_pin_attempt(now):
                 raise HTTPException(status_code=429, detail="Pairing temporarily locked")

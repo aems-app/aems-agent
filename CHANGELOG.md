@@ -2,6 +2,19 @@
 
 All notable changes to `aems-agent` are recorded here. Format follows [Keep a Changelog](https://keepachangelog.com/) and the project uses [SemVer](https://semver.org/).
 
+## 0.4.36 — 2026-06-29
+
+Security-hardening release from a 2026-06-24 adversarial re-audit. Six defects (MEDIUM→INFO), each landed with a 1:1 regression test in `tests/test_security_reaudit.py`. No user-facing behaviour change for normal grading flows.
+
+### Fixed
+
+- **Global request-body size cap.** A pure-ASGI `_BodySizeLimitMiddleware` rejects oversize request bodies (413) *before* FastAPI buffers them for Pydantic-model dependency resolution — closing pre-auth unbounded-body buffering reachable from any page that can hit `127.0.0.1`. Limits: 16 MiB for JSON/pairing/self-update, 210 MiB backstop for `/files/` PDF uploads.
+- **SSRF guard on Canvas download redirects.** Redirects are now vetoed unless every hop is HTTPS to a public/global IP; loopback, private, link-local, the `169.254.169.254` metadata address, shared-CGNAT `100.64/10`, and multicast are blocked, and the redirect chain is capped at 5 (`_redirect_ssrf_guard` / `UnsafeRedirectError`).
+- **Render-DPI clamp against pixmap memory blowups.** `generate_bundle` scales render dpi down (`_MAX_RENDER_PIXELS=100 MP`) so a PDF with a pathological MediaBox can't coerce `get_pixmap` into a multi-GB allocation. Realistic exam pages are untouched; clamping logs a warning.
+- **Self-update downgrade floor.** `/self-update` returns `400 downgrade_blocked` for a strictly-lower semver target; same-version reinstall is still allowed (`_version_release_tuple`, fail-open on unparseable versions).
+- **Byte-safe constant-time pairing comparisons + ASCII-only PIN.** `_ct_eq()` (UTF-8 with `surrogatepass`) replaces raw `secrets.compare_digest(str, str)` that 500'd on non-ASCII origin/challenge/PIN; the PIN pattern is tightened `^\d{6}$` → `^[0-9]{6}$` to reject Arabic-Indic digits.
+- **Private-key permission re-tighten.** `ensure_keypair` now re-chmods an existing private key to `0600` on the early-return and rederive paths (legacy keys written with looser modes). No-op on Windows.
+
 ## 0.4.35 — 2026-06-21
 
 Follow-up to the v0.4.34 macOS pass: the Apple tester's "NEW" report showed v0.4.34 surfaced the `Connected — not paired` badge correctly but exposed a complete macOS **dead-end loop** — you can't pair without a storage folder, setting a storage folder from the menu bar crashed the agent, and the web "Launch agent" button couldn't restart it. This release breaks the loop. Pairs with AEMS web changes (persistent storage-folder guidance, bulletproof pairing lock, launch-failure feedback).

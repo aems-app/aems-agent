@@ -40,6 +40,21 @@ def _write_secret_bytes(path: Path, data: bytes) -> None:
         os.close(fd)
 
 
+def _tighten_secret_perms(path: Path) -> None:
+    """Best-effort re-tighten of an existing secret file to owner-only (0600).
+
+    The O_CREAT mode in ``_write_secret_bytes`` only applies when the file is
+    first created, so a private key written by an older agent version (or one
+    that predates owner-only creation) keeps its looser mode until this runs.
+    Mirrors the token re-tightening in ``config.ensure_auth_token``. No-op on
+    Windows, where ACLs govern access instead of the POSIX mode.
+    """
+    try:
+        path.chmod(0o600)
+    except OSError:
+        pass
+
+
 def ensure_keypair(config_dir: Path) -> None:
     """Generate keypair if missing. Idempotent.
 
@@ -49,6 +64,9 @@ def ensure_keypair(config_dir: Path) -> None:
     priv_path = config_dir / _PRIVATE_KEY_FILE
     pub_path = config_dir / _PUBLIC_KEY_FILE
     if priv_path.exists() and pub_path.exists():
+        # Tighten permissions on keys created by older agent versions; the
+        # O_CREAT mode only applied when the file was first written.
+        _tighten_secret_perms(priv_path)
         return
 
     config_dir.mkdir(parents=True, exist_ok=True)
@@ -57,6 +75,7 @@ def ensure_keypair(config_dir: Path) -> None:
         # Private key present but public key missing: rederive instead of
         # regenerating, so payloads sealed to the existing key still decrypt
         # and the advertised key id stays stable.
+        _tighten_secret_perms(priv_path)
         key = PrivateKey(priv_path.read_bytes())
         pub_path.write_bytes(bytes(key.public_key))
         return

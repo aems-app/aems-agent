@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "aems-agent"
-version = "0.4.35"
+version = "0.4.36"
 description = "AEMS Local Bridge Agent — local filesystem access for exam PDFs"
 authors = [{name = "AEMS Team", email = "contact@aems.app"}]
 readme = "README.md"

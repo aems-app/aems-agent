@@ -24,6 +24,31 @@ logger = logging.getLogger(__name__)
 # Minimum text length per page to consider "has substantial text"
 _MIN_TEXT_LENGTH = 50
 
+# Upper bound on rendered pixels per page (defence against a PDF whose MediaBox
+# declares enormous page dimensions: `get_pixmap` allocates width×height×3 bytes,
+# so a tiny file with a 50000pt page would otherwise force a multi-GB
+# allocation). 100 MP is far above any real exam page — A4 at 600 dpi is ~35 MP,
+# A3 ~70 MP — so this never alters normal renders; it only scales down a
+# pathological page's effective dpi to keep the allocation bounded (~300 MB max).
+_MAX_RENDER_PIXELS = 100_000_000
+
+
+def _safe_render_dpi(width: float, height: float, dpi: int) -> int:
+    """Return *dpi*, reduced if needed so the rendered page stays under the cap.
+
+    ``width``/``height`` are PDF point dimensions (1/72 inch). Returns the
+    original dpi unchanged for any page that renders under ``_MAX_RENDER_PIXELS``
+    (i.e. every realistic exam page); for an oversized page it returns a smaller
+    dpi so ``width×height`` pixels fit the cap, preserving aspect ratio.
+    """
+    zoom = dpi / 72.0
+    pixels = (width * zoom) * (height * zoom)
+    if pixels <= _MAX_RENDER_PIXELS or pixels <= 0:
+        return dpi
+    scale = (_MAX_RENDER_PIXELS / pixels) ** 0.5
+    return max(1, int(dpi * scale))
+
+
 # Below this threshold (chars per page area unit), page is considered "low text"
 _LOW_TEXT_DENSITY_THRESHOLD = 0.0001
 
@@ -243,7 +268,18 @@ def generate_bundle(
             # text_only: never render images
 
             if needs_image:
-                pixmap = page.get_pixmap(dpi=dpi, alpha=False)
+                render_dpi = _safe_render_dpi(width, height, dpi)
+                if render_dpi != dpi:
+                    logger.warning(
+                        "Page %d has oversized dimensions (%.0fx%.0f pt); "
+                        "reducing render dpi %d->%d to bound memory",
+                        i + 1,
+                        width,
+                        height,
+                        dpi,
+                        render_dpi,
+                    )
+                pixmap = page.get_pixmap(dpi=render_dpi, alpha=False)
                 image = Image.frombytes("RGB", (pixmap.width, pixmap.height), pixmap.samples)
                 webp_buffer = BytesIO()
                 # Lossy WebP at quality=85 — matches the server-side encoder

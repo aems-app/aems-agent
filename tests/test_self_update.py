@@ -52,6 +52,7 @@ class TestSelfUpdateValidation:
             raise RuntimeError("network disabled in unit test")
 
         monkeypatch.setattr(routes, "_fetch_text", _boom)
+        monkeypatch.setattr(routes, "AGENT_VERSION", "0.4.23")
         # Force a platform we support so we don't get 501 before validation runs
         monkeypatch.setitem(
             routes._SELF_UPDATE_ASSET_BY_PLATFORM, sys.platform, "aems-agent-setup.exe"
@@ -74,6 +75,7 @@ class TestSelfUpdatePlatformGate:
         from aems_agent import routes
 
         # Pretend we're on an unsupported platform by clearing the map for this run.
+        monkeypatch.setattr(routes, "AGENT_VERSION", "0.4.23")
         monkeypatch.setattr(routes, "_SELF_UPDATE_ASSET_BY_PLATFORM", {})
         r = agent_client.post("/self-update", json={"version": "0.4.24"}, headers=auth_headers)
         assert r.status_code == 501
@@ -99,6 +101,7 @@ class TestSelfUpdateShaVerification:
         monkeypatch.setitem(
             routes._SELF_UPDATE_ASSET_BY_PLATFORM, sys.platform, "aems-agent-setup.exe"
         )
+        monkeypatch.setattr(routes, "AGENT_VERSION", "0.4.23")
 
         good_bytes = b"this is the real installer payload"
         bad_bytes = b"this is a tampered payload of different content"
@@ -150,6 +153,7 @@ class TestSelfUpdateHappyPath:
         monkeypatch.setitem(
             routes._SELF_UPDATE_ASSET_BY_PLATFORM, sys.platform, "aems-agent-setup.exe"
         )
+        monkeypatch.setattr(routes, "AGENT_VERSION", "0.4.23")
 
         payload = b"%PDF-1.4 not really an installer but treat as one"
         sha = hashlib.sha256(payload).hexdigest()
