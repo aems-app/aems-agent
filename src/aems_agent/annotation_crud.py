@@ -314,8 +314,6 @@ def _validate_rect(rect: Any) -> List[float]:
     if not isinstance(rect, (list, tuple)) or len(rect) != 4:
         raise ValueError("rect must be [x0, y0, x1, y1]")
     values = [float(v) for v in rect]
-    if any(v < 0 for v in values):
-        raise ValueError("rect values must be non-negative")
     if values[0] >= values[2] or values[1] >= values[3]:
         raise ValueError("rect requires x0 < x1 and y0 < y1")
     return values
@@ -609,6 +607,21 @@ def update_annotation(
     if payload.get("stroke_color_rgb") is not None:
         new_stroke_color_rgb = _validate_stroke_color_rgb(payload["stroke_color_rgb"])
 
+    # Text-anchored highlight extend/shorten: per-line quads (same PDF
+    # bottom-left space as ``rect``) plus the re-derived anchor phrase. Mirrors
+    # the AEMS canvas/offline annotation handlers so Canvas-produced anchored
+    # highlights opened through the local agent are not collapsed on edit.
+    new_quads = payload.get("quads")
+    new_anchor_text = payload.get("anchor_text")
+    if new_quads is not None:
+        if not isinstance(new_quads, list) or not new_quads:
+            raise ValueError("quads must be a non-empty list of [x0, y0, x1, y1]")
+        for quad in new_quads:
+            if not isinstance(quad, (list, tuple)) or len(quad) != 4:
+                raise ValueError("each quad must be [x0, y0, x1, y1]")
+    if new_anchor_text is not None and not isinstance(new_anchor_text, str):
+        raise ValueError("anchor_text must be a string")
+
     if new_content is not None:
         _validate_content(new_content)
 
@@ -622,10 +635,12 @@ def update_annotation(
         and new_is_verdict is None
         and new_points is None
         and new_stroke_color_rgb is None
+        and new_quads is None
+        and new_anchor_text is None
     ):
         raise ValueError(
             "Must provide at least one of: content, rect, color, page_index, "
-            "source, is_verdict, points, stroke_color_rgb"
+            "source, is_verdict, points, stroke_color_rgb, quads, anchor_text"
         )
 
     # Build the canonical identifier for the shared package
@@ -634,6 +649,10 @@ def update_annotation(
     lock = _get_pdf_lock(pdf_path)
     with lock:
         with PDFAnnotator(pdf_path) as annotator:
+            page_count = annotator.doc.page_count if annotator.doc else 0
+            if new_page_index is not None:
+                new_page_index = _validate_page_index(new_page_index, page_count)
+
             # Grader name fallback: payload > existing annotation author > "Teacher"
             if not grader_name:
                 existing = (
@@ -653,7 +672,8 @@ def update_annotation(
             # Convert rect from PDF-space (bottom-left origin) to
             # PyMuPDF-space (top-left origin), same as add_annotation does.
             rect_tuple = None
-            if new_rect is not None:
+            quads_converted: Optional[List[List[float]]] = None
+            if new_rect is not None or new_quads is not None:
                 target_pg = new_page_index
                 if target_pg is None:
                     found = (
@@ -664,12 +684,20 @@ def update_annotation(
                     target_pg = found[0] if found else 0
                 page_obj = annotator.doc[target_pg]
                 page_height = page_obj.rect.height or 792.0
-                rect_tuple = tuple(_pdf_rect_to_pymupdf(list(new_rect), page_height))
+                if new_rect is not None:
+                    rect_tuple = tuple(_pdf_rect_to_pymupdf(list(new_rect), page_height))
+                if new_quads is not None:
+                    quads_converted = [
+                        _pdf_rect_to_pymupdf(list(quad), page_height)
+                        for quad in new_quads
+                    ]
 
             update_result = annotator.update_annotation(
                 annotation_identifier=canonical_identifier,
                 new_content=new_content,
                 new_rect=rect_tuple,
+                new_quads=quads_converted,
+                new_anchor_text=new_anchor_text,
                 new_color=new_color,
                 new_page_index=new_page_index,
                 grader_name=grader_name,

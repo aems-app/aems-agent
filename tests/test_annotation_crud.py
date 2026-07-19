@@ -629,3 +629,64 @@ class TestDeleteAnnotation:
         result_after = list_annotations(annotated_pdf)
         total_after = sum(len(anns) for anns in result_after["annotations"].values())
         assert total_after == 2
+
+
+class TestHighlightQuadRoundTrip:
+    """Three-repo sync: anchored-highlight extend/shorten via the local agent
+    must round-trip per-line quads + anchor phrase and transfer ownership,
+    matching the AEMS canvas/offline handlers (never collapse to a union box)."""
+
+    def test_update_extends_highlight_quads_and_transfers_ownership(
+        self, tmp_path: Path
+    ) -> None:
+        from aems_agent.annotation_crud import update_annotation, list_annotations
+
+        pdf_path = tmp_path / "hl.pdf"
+        doc = fitz.open()
+        page = doc.new_page(width=612, height=792)
+        page.insert_text((72, 100), "the quick brown fox")
+        page.insert_text((72, 120), "jumps over the lazy dog")
+        doc.save(str(pdf_path))
+        doc.close()
+
+        ann = PDFAnnotation(
+            id="agent-hl-1",
+            page_index=0,
+            bbox=BBox(x0=72, y0=92, x1=185, y1=104),
+            quads=[BBox(x0=72, y0=92, x1=185, y1=104)],
+            kind=AnnotationType.HIGHLIGHT,
+            color=AnnotationColor.RED,
+            comment="Sign error.",
+            anchor_text="the quick brown fox",
+            source=AnnotationSource.AI,
+            grader_name="AI Grader",
+        )
+        with PDFAnnotator(pdf_path) as annotator:
+            assert annotator.add_annotation(ann) is True
+            annotator.save(pdf_path)
+
+        # Extend via the agent with NEW quads in PDF bottom-left space (page
+        # height 792): top-left [72,92,185,104] + [72,112,160,124] ->
+        # bottom-left [72,688,185,700] + [72,668,160,680].
+        result = update_annotation(
+            pdf_path,
+            "agent-hl-1",
+            {
+                "quads": [[72.0, 688.0, 185.0, 700.0], [72.0, 668.0, 160.0, 680.0]],
+                "anchor_text": "the quick brown fox jumps",
+                "source": "HUMAN",
+            },
+        )
+        assert result.get("success") is True
+
+        listing = list_annotations(pdf_path)
+        anns: List[dict] = []
+        for page_list in listing["annotations"].values():
+            anns.extend(page_list)
+        highlights = [a for a in anns if str(a.get("type", "")).lower() == "highlight"]
+        assert len(highlights) == 1
+        got = highlights[0]
+        assert got["quads"] is not None
+        assert len(got["quads"]) == 2  # per-line geometry preserved, not collapsed
+        assert got["anchor_text"] == "the quick brown fox jumps"
+        assert str(got.get("source")) == "HUMAN"
