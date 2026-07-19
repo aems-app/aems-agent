@@ -8,6 +8,7 @@ JSON shapes consumed by the browser review UI.
 """
 
 import logging
+import math
 import re
 import threading
 from pathlib import Path
@@ -314,6 +315,10 @@ def _validate_rect(rect: Any) -> List[float]:
     if not isinstance(rect, (list, tuple)) or len(rect) != 4:
         raise ValueError("rect must be [x0, y0, x1, y1]")
     values = [float(v) for v in rect]
+    if any(not math.isfinite(v) for v in values):
+        raise ValueError("rect values must be finite")
+    if any(v < 0 for v in values):
+        raise ValueError("rect values must be non-negative")
     if values[0] >= values[2] or values[1] >= values[3]:
         raise ValueError("rect requires x0 < x1 and y0 < y1")
     return values
@@ -619,6 +624,12 @@ def update_annotation(
         for quad in new_quads:
             if not isinstance(quad, (list, tuple)) or len(quad) != 4:
                 raise ValueError("each quad must be [x0, y0, x1, y1]")
+            try:
+                _floats = [float(v) for v in quad]
+            except (TypeError, ValueError):
+                raise ValueError("quad values must be numbers")
+            if any(not math.isfinite(v) for v in _floats):
+                raise ValueError("quad values must be finite")
     if new_anchor_text is not None and not isinstance(new_anchor_text, str):
         raise ValueError("anchor_text must be a string")
 
@@ -692,12 +703,15 @@ def update_annotation(
                         for quad in new_quads
                     ]
 
-            update_result = annotator.update_annotation(
+            # The text-anchored-highlight kwargs (new_quads / new_anchor_text) are
+            # only understood by newer aems_pdf_annotator packages. Pass them ONLY
+            # when actually set so a plain content/color/source edit still works
+            # against an older installed package (the fix reaches the agent on the
+            # next package re-install) instead of raising TypeError on every edit.
+            _update_kwargs: dict[str, Any] = dict(
                 annotation_identifier=canonical_identifier,
                 new_content=new_content,
                 new_rect=rect_tuple,
-                new_quads=quads_converted,
-                new_anchor_text=new_anchor_text,
                 new_color=new_color,
                 new_page_index=new_page_index,
                 grader_name=grader_name,
@@ -706,6 +720,22 @@ def update_annotation(
                 new_points=new_points,
                 new_stroke_color_rgb=new_stroke_color_rgb,
             )
+            if quads_converted is not None:
+                _update_kwargs["new_quads"] = quads_converted
+            if new_anchor_text is not None:
+                _update_kwargs["new_anchor_text"] = new_anchor_text
+            try:
+                update_result = annotator.update_annotation(**_update_kwargs)
+            except TypeError as _kw_err:
+                # Older installed package without highlight kwargs: retry without
+                # them so non-highlight edits still succeed (highlight geometry is
+                # simply not updated until the package is re-installed).
+                if "new_quads" in _update_kwargs or "new_anchor_text" in _update_kwargs:
+                    _update_kwargs.pop("new_quads", None)
+                    _update_kwargs.pop("new_anchor_text", None)
+                    update_result = annotator.update_annotation(**_update_kwargs)
+                else:
+                    raise _kw_err
 
             # Handle cross-page moves which return a tuple
             if isinstance(update_result, tuple):
