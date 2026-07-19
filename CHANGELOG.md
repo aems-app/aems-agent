@@ -2,6 +2,18 @@
 
 All notable changes to `aems-agent` are recorded here. Format follows [Keep a Changelog](https://keepachangelog.com/) and the project uses [SemVer](https://semver.org/).
 
+## 0.5.1 — 2026-07-19
+
+Packaging fix on top of 0.5.0 (whose executables shipped annotator 0.2.0 from
+PyPI — no quads support, so the highlight round-trip was inert; use 0.5.1).
+
+### Fixed
+
+- **Bundle a quads-capable annotator.** `aems-pdf-annotator` is now installed
+  from the public git tag `v0.3.0` (PyPI still carries only 0.2.0). This also
+  fixes the CI `KeyError: 'quads'` in the round-trip suite.
+- **black formatting** on three files from the feature merge (lint job).
+
 ## 0.5.0 — 2026-07-19
 
 Text-anchored-highlights support round-trip plus reliability fixes.

@@ -699,8 +699,7 @@ def update_annotation(
                     rect_tuple = tuple(_pdf_rect_to_pymupdf(list(new_rect), page_height))
                 if new_quads is not None:
                     quads_converted = [
-                        _pdf_rect_to_pymupdf(list(quad), page_height)
-                        for quad in new_quads
+                        _pdf_rect_to_pymupdf(list(quad), page_height) for quad in new_quads
                     ]
 
             # The text-anchored-highlight kwargs (new_quads / new_anchor_text) are

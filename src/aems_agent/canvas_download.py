@@ -465,11 +465,7 @@ _download_jobs: dict[str, DownloadJob] = {}
 def _evict_oldest_jobs() -> None:
     """Evict oldest jobs if store exceeds MAX_JOBS."""
     while len(_download_jobs) >= MAX_JOBS:
-        evictable = {
-            key: job
-            for key, job in _download_jobs.items()
-            if job.status != "running"
-        }
+        evictable = {key: job for key, job in _download_jobs.items() if job.status != "running"}
         if not evictable:
             break
         oldest_key = min(evictable, key=lambda k: evictable[k].created_at)

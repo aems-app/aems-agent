@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "aems-agent"
-version = "0.5.0"
+version = "0.5.1"
 description = "AEMS Local Bridge Agent — local filesystem access for exam PDFs"
 authors = [{name = "AEMS Team", email = "contact@aems.app"}]
 readme = "README.md"
@@ -39,7 +39,10 @@ dependencies = [
     # pillow<10.3 is vulnerable to CVE-2023-50447 (ImageMath eval) and
     # CVE-2024-28219 (_imagingcms buffer overflow).
     "pillow>=10.3.0",
-    "aems-pdf-annotator>=0.2.0,<0.4.0",
+    # Pinned git tag (public repo): PyPI still carries only 0.2.0, which lacks
+    # the highlight-quads round-trip this agent version requires. Repoint to
+    # PyPI once 0.3.0 is published there.
+    "aems-pdf-annotator @ git+https://github.com/aems-app/aems-pdf-annotator.git@v0.3.0",
     "pymupdf>=1.25.0",
     # pystray is required for the tray notification that surfaces the
     # pairing PIN to the user.  Without it the agent falls back to

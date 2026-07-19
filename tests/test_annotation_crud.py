@@ -636,9 +636,7 @@ class TestHighlightQuadRoundTrip:
     must round-trip per-line quads + anchor phrase and transfer ownership,
     matching the AEMS canvas/offline handlers (never collapse to a union box)."""
 
-    def test_update_extends_highlight_quads_and_transfers_ownership(
-        self, tmp_path: Path
-    ) -> None:
+    def test_update_extends_highlight_quads_and_transfers_ownership(self, tmp_path: Path) -> None:
         from aems_agent.annotation_crud import update_annotation, list_annotations
 
         pdf_path = tmp_path / "hl.pdf"
