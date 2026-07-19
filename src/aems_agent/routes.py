@@ -1672,6 +1672,7 @@ async def canvas_download_submissions(
 
     from .canvas_download import (
         ManifestValidationError,
+        attach_download_task,
         create_download_job,
         run_download_job,
         validate_manifest,
@@ -1707,13 +1708,14 @@ async def canvas_download_submissions(
         raise HTTPException(status_code=503, detail="Storage path not configured")
 
     job_id = create_download_job(manifest)
-    asyncio.create_task(
+    task = asyncio.create_task(
         run_download_job(
             job_id=job_id,
             manifest=manifest,
             storage_path=Path(config.storage_path),
         )
     )
+    attach_download_task(job_id, task)
 
     return {
         "job_id": job_id,

@@ -544,9 +544,12 @@ def _start_tray(config_dir: Path, agent_app: Optional[FastAPI] = None) -> None:
             daemon=True,
             name="aems-tray",
         )
-        thread.start()
-
+        # Set "running" BEFORE start(): once the daemon thread launches it owns
+        # the status — run_icon_safely may set "failed" immediately (e.g. a dead
+        # pystray backend), and a main-thread write after start() raced it and
+        # could overwrite that legitimate "failed" with "running".
         _set_tray_state(agent_app, "running")
+        thread.start()
         typer.echo("  System tray: enabled")
     except ImportError:
         _set_tray_state(agent_app, "unavailable", "pystray not installed")

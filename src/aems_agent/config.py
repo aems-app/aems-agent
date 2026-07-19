@@ -142,8 +142,9 @@ def _write_owner_only_text(path: Path, content: str) -> None:
     translation on Windows; ``newline=""`` keeps the text layer from doing
     it too, so the bytes written are exactly ``content`` on every platform.
     """
+    tmp_path = path.with_name(f".{path.name}.tmp")
     flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC | getattr(os, "O_BINARY", 0)
-    fd = os.open(str(path), flags, 0o600)
+    fd = os.open(str(tmp_path), flags, 0o600)
     try:
         handle = os.fdopen(fd, "w", encoding="utf-8", newline="")
     except BaseException:
@@ -151,6 +152,9 @@ def _write_owner_only_text(path: Path, content: str) -> None:
         raise
     with handle:
         handle.write(content)
+        handle.flush()
+        os.fsync(handle.fileno())
+    os.replace(tmp_path, path)
 
 
 def load_config(config_dir: Optional[Path] = None) -> AgentConfig:

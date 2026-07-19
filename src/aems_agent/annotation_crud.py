@@ -8,6 +8,7 @@ JSON shapes consumed by the browser review UI.
 """
 
 import logging
+import math
 import re
 import threading
 from pathlib import Path
@@ -314,6 +315,8 @@ def _validate_rect(rect: Any) -> List[float]:
     if not isinstance(rect, (list, tuple)) or len(rect) != 4:
         raise ValueError("rect must be [x0, y0, x1, y1]")
     values = [float(v) for v in rect]
+    if any(not math.isfinite(v) for v in values):
+        raise ValueError("rect values must be finite")
     if any(v < 0 for v in values):
         raise ValueError("rect values must be non-negative")
     if values[0] >= values[2] or values[1] >= values[3]:
@@ -609,6 +612,27 @@ def update_annotation(
     if payload.get("stroke_color_rgb") is not None:
         new_stroke_color_rgb = _validate_stroke_color_rgb(payload["stroke_color_rgb"])
 
+    # Text-anchored highlight extend/shorten: per-line quads (same PDF
+    # bottom-left space as ``rect``) plus the re-derived anchor phrase. Mirrors
+    # the AEMS canvas/offline annotation handlers so Canvas-produced anchored
+    # highlights opened through the local agent are not collapsed on edit.
+    new_quads = payload.get("quads")
+    new_anchor_text = payload.get("anchor_text")
+    if new_quads is not None:
+        if not isinstance(new_quads, list) or not new_quads:
+            raise ValueError("quads must be a non-empty list of [x0, y0, x1, y1]")
+        for quad in new_quads:
+            if not isinstance(quad, (list, tuple)) or len(quad) != 4:
+                raise ValueError("each quad must be [x0, y0, x1, y1]")
+            try:
+                _floats = [float(v) for v in quad]
+            except (TypeError, ValueError):
+                raise ValueError("quad values must be numbers")
+            if any(not math.isfinite(v) for v in _floats):
+                raise ValueError("quad values must be finite")
+    if new_anchor_text is not None and not isinstance(new_anchor_text, str):
+        raise ValueError("anchor_text must be a string")
+
     if new_content is not None:
         _validate_content(new_content)
 
@@ -622,10 +646,12 @@ def update_annotation(
         and new_is_verdict is None
         and new_points is None
         and new_stroke_color_rgb is None
+        and new_quads is None
+        and new_anchor_text is None
     ):
         raise ValueError(
             "Must provide at least one of: content, rect, color, page_index, "
-            "source, is_verdict, points, stroke_color_rgb"
+            "source, is_verdict, points, stroke_color_rgb, quads, anchor_text"
         )
 
     # Build the canonical identifier for the shared package
@@ -634,6 +660,10 @@ def update_annotation(
     lock = _get_pdf_lock(pdf_path)
     with lock:
         with PDFAnnotator(pdf_path) as annotator:
+            page_count = annotator.doc.page_count if annotator.doc else 0
+            if new_page_index is not None:
+                new_page_index = _validate_page_index(new_page_index, page_count)
+
             # Grader name fallback: payload > existing annotation author > "Teacher"
             if not grader_name:
                 existing = (
@@ -653,7 +683,8 @@ def update_annotation(
             # Convert rect from PDF-space (bottom-left origin) to
             # PyMuPDF-space (top-left origin), same as add_annotation does.
             rect_tuple = None
-            if new_rect is not None:
+            quads_converted: Optional[List[List[float]]] = None
+            if new_rect is not None or new_quads is not None:
                 target_pg = new_page_index
                 if target_pg is None:
                     found = (
@@ -664,9 +695,20 @@ def update_annotation(
                     target_pg = found[0] if found else 0
                 page_obj = annotator.doc[target_pg]
                 page_height = page_obj.rect.height or 792.0
-                rect_tuple = tuple(_pdf_rect_to_pymupdf(list(new_rect), page_height))
+                if new_rect is not None:
+                    rect_tuple = tuple(_pdf_rect_to_pymupdf(list(new_rect), page_height))
+                if new_quads is not None:
+                    quads_converted = [
+                        _pdf_rect_to_pymupdf(list(quad), page_height)
+                        for quad in new_quads
+                    ]
 
-            update_result = annotator.update_annotation(
+            # The text-anchored-highlight kwargs (new_quads / new_anchor_text) are
+            # only understood by newer aems_pdf_annotator packages. Pass them ONLY
+            # when actually set so a plain content/color/source edit still works
+            # against an older installed package (the fix reaches the agent on the
+            # next package re-install) instead of raising TypeError on every edit.
+            _update_kwargs: dict[str, Any] = dict(
                 annotation_identifier=canonical_identifier,
                 new_content=new_content,
                 new_rect=rect_tuple,
@@ -678,6 +720,22 @@ def update_annotation(
                 new_points=new_points,
                 new_stroke_color_rgb=new_stroke_color_rgb,
             )
+            if quads_converted is not None:
+                _update_kwargs["new_quads"] = quads_converted
+            if new_anchor_text is not None:
+                _update_kwargs["new_anchor_text"] = new_anchor_text
+            try:
+                update_result = annotator.update_annotation(**_update_kwargs)
+            except TypeError as _kw_err:
+                # Older installed package without highlight kwargs: retry without
+                # them so non-highlight edits still succeed (highlight geometry is
+                # simply not updated until the package is re-installed).
+                if "new_quads" in _update_kwargs or "new_anchor_text" in _update_kwargs:
+                    _update_kwargs.pop("new_quads", None)
+                    _update_kwargs.pop("new_anchor_text", None)
+                    update_result = annotator.update_annotation(**_update_kwargs)
+                else:
+                    raise _kw_err
 
             # Handle cross-page moves which return a tuple
             if isinstance(update_result, tuple):

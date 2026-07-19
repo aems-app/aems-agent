@@ -455,6 +455,7 @@ class DownloadJob:
     failed: int = 0
     per_submission: list[dict[str, Any]] = field(default_factory=list)
     created_at: float = field(default_factory=time.time)
+    task: Any = None
 
 
 # Module-level job store. Bounded by MAX_JOBS.
@@ -464,7 +465,14 @@ _download_jobs: dict[str, DownloadJob] = {}
 def _evict_oldest_jobs() -> None:
     """Evict oldest jobs if store exceeds MAX_JOBS."""
     while len(_download_jobs) >= MAX_JOBS:
-        oldest_key = min(_download_jobs, key=lambda k: _download_jobs[k].created_at)
+        evictable = {
+            key: job
+            for key, job in _download_jobs.items()
+            if job.status != "running"
+        }
+        if not evictable:
+            break
+        oldest_key = min(evictable, key=lambda k: evictable[k].created_at)
         del _download_jobs[oldest_key]
 
 
@@ -486,6 +494,13 @@ def create_download_job(manifest: dict[str, Any]) -> str:
     )
     _download_jobs[job_id] = job
     return job_id
+
+
+def attach_download_task(job_id: str, task: Any) -> None:
+    """Hold a strong reference to a background download task."""
+    job = _download_jobs.get(job_id)
+    if job is not None:
+        job.task = task
 
 
 def get_download_job(job_id: str) -> Optional[DownloadJob]:
