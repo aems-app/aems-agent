@@ -2,6 +2,33 @@
 
 All notable changes to `aems-agent` are recorded here. Format follows [Keep a Changelog](https://keepachangelog.com/) and the project uses [SemVer](https://semver.org/).
 
+## 0.5.0 — 2026-07-19
+
+Text-anchored-highlights support round-trip plus reliability fixes.
+
+### Added
+
+- **Highlight quads + anchor_text round-trip in annotation CRUD.** The agent now
+  preserves per-line highlight quad geometry and the anchored phrase through
+  update/revert flows, with graceful fallback for legacy annotations that carry
+  no quads (mirrors the AEMS/aems-pdf-annotator contract change).
+
+### Fixed
+
+- **Durable config write + download-job task retention** (crash-safe config
+  persistence; long download jobs no longer lose task records).
+- **Tray status race.** `tray_status` was written `"running"` after the tray
+  thread started, so a tray backend that failed instantly had its `"failed"`
+  status overwritten — users saw a permanently wrong "running" badge. The
+  status is now set before the thread launches; a real failure always wins.
+
+### Security note
+
+- A CI log surfaced a fake "StarletteDeprecationWarning" instructing to install
+  `httpx2`. Genuine starlette contains no such reference; `httpx2` is
+  typosquat-shaped and must NOT be installed. CI dependency resolution needs an
+  audit before trusting that runner's environment.
+
 ## 0.4.36 — 2026-06-29
 
 Security-hardening release from a 2026-06-24 adversarial re-audit. Six defects (MEDIUM→INFO), each landed with a 1:1 regression test in `tests/test_security_reaudit.py`. No user-facing behaviour change for normal grading flows.
