@@ -99,6 +99,42 @@ def _pdf_rect_to_pymupdf(rect: List[float], page_height: float) -> List[float]:
     return [x0, y0_mu, x1, y1_mu]
 
 
+def _pdf_quad_to_pymupdf(quad: List[float], page: Any) -> List[float]:
+    """Map a text-anchored highlight quad from raw PDF user space into PyMuPDF page
+    space, honouring the page CropBox origin AND rotation via
+    ``page.transformation_matrix``.
+
+    The browser persists quads in unrotated MediaBox-origin PDF space (pdf.js
+    ``item.transform``). A plain ``page_height`` flip (``_pdf_rect_to_pymupdf``) is
+    correct only when CropBox origin is (0,0) and rotation is 0; on a CropBox-offset
+    or rotated page it mis-places the highlight. On a normal page
+    ``transformation_matrix`` equals ``Matrix(1, 0, 0, -1, 0, page_height)`` exactly
+    — a strict no-op for the zero-CropBox/unrotated exam corpus. Mirrors the AEMS
+    canvas/offline annotation handlers.
+    """
+    import fitz
+
+    r = fitz.Rect(float(quad[0]), float(quad[1]), float(quad[2]), float(quad[3]))
+    r = r * page.transformation_matrix
+    r.normalize()
+    return [r.x0, r.y0, r.x1, r.y1]
+
+
+def _page_quad_geometry_supported(page: Any) -> bool:
+    """False only for a page that is BOTH rotated AND has a CropBox origin that
+    differs from its MediaBox — the one geometry ``transformation_matrix`` cannot
+    place exactly (rare, absent from the exam corpus). Extend/shorten persistence is
+    rejected there rather than writing a mis-placed highlight."""
+    try:
+        if not page.rotation:
+            return True
+        cb = page.cropbox
+        mb = page.mediabox
+        return abs(cb.x0 - mb.x0) <= 0.5 and abs(cb.y0 - mb.y0) <= 0.5
+    except Exception:
+        return True
+
+
 # ---------------------------------------------------------------------------
 # File-level lock manager
 # ---------------------------------------------------------------------------
@@ -698,8 +734,17 @@ def update_annotation(
                 if new_rect is not None:
                     rect_tuple = tuple(_pdf_rect_to_pymupdf(list(new_rect), page_height))
                 if new_quads is not None:
+                    # Text-anchored quads carry raw PDF user-space coordinates;
+                    # reject on the one geometry the transform cannot place exactly
+                    # rather than writing a mis-located highlight (the AI highlight
+                    # and comment tether still work — nothing is dropped).
+                    if not _page_quad_geometry_supported(page_obj):
+                        raise ValueError(
+                            "extend/shorten is not supported on pages that are "
+                            "both rotated and cropped"
+                        )
                     quads_converted = [
-                        _pdf_rect_to_pymupdf(list(quad), page_height) for quad in new_quads
+                        _pdf_quad_to_pymupdf(list(quad), page_obj) for quad in new_quads
                     ]
 
             # The text-anchored-highlight kwargs (new_quads / new_anchor_text) are
