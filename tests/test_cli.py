@@ -184,7 +184,7 @@ def test_run_starts_recovery_app_without_rewriting_invalid_config(
     monkeypatch.setitem(
         sys.modules,
         "aems_agent.app",
-        SimpleNamespace(create_app=lambda _: fake_app),
+        SimpleNamespace(create_app=lambda _, fallback_config=None: fake_app),
     )
 
     cli_module.run(port=61234, host="127.0.0.1", tray=False, launch_from_uri=None)

@@ -272,7 +272,13 @@ def validate_manifest(
         raise ManifestValidationError("HTTPS required for Canvas URL", code="canvas_https_required")
 
     # Check hostname allowlist (with *.instructure.com wildcard)
-    hostname = normalize_canvas_host(parsed.hostname or "")
+    try:
+        hostname = normalize_canvas_host(parsed.hostname or "")
+    except ValueError as exc:
+        raise ManifestValidationError(
+            "Canvas URL must include a valid hostname",
+            code="canvas_host_invalid",
+        ) from exc
     normalized_allowed_hosts = {normalize_canvas_host(host) for host in allowed_hosts}
     host_allowed = hostname in normalized_allowed_hosts
     if not host_allowed and hostname.endswith(".instructure.com"):
