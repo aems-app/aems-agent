@@ -74,8 +74,7 @@ def normalize_canvas_host(value: str) -> str:
     if not host:
         raise ValueError("Canvas host must not be empty")
     try:
-        ipaddress.ip_address(host)
-        return host
+        return str(ipaddress.ip_address(host))
     except ValueError:
         pass
     if any(character in host for character in (":", "/", "\\", "?", "#", "@")):

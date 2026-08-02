@@ -113,6 +113,19 @@ class TestValidateManifest:
         assert excinfo.value.rejected_host == "evil.com"
         assert excinfo.value.as_detail()["rejected_host"] == "evil.com"
 
+    def test_validate_manifest_matches_equivalent_ipv6_host_spellings(self) -> None:
+        from aems_agent.canvas_download import validate_manifest
+
+        manifest = _make_manifest(
+            canvas_base_url="https://[2001:0db8:0000:0000:0000:0000:0000:0001]"
+        )
+
+        assert validate_manifest(
+            manifest,
+            allowed_hosts=["2001:db8::1"],
+            agent_key_id="test_key_id",
+        )
+
     def test_validate_manifest_http_rejected(self) -> None:
         from aems_agent.canvas_download import ManifestValidationError, validate_manifest
 

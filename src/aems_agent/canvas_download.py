@@ -25,10 +25,11 @@ from contextlib import suppress
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Optional
+from urllib.parse import urlparse
 
 import httpx
 
-from urllib.parse import urlparse
+from aems_agent.config import normalize_canvas_host
 
 # Safe path segment pattern (matches _validate_path_segment in routes.py)
 _SAFE_SEGMENT_RE = re.compile(r"^[a-zA-Z0-9_\-]+$")
@@ -271,8 +272,8 @@ def validate_manifest(
         raise ManifestValidationError("HTTPS required for Canvas URL", code="canvas_https_required")
 
     # Check hostname allowlist (with *.instructure.com wildcard)
-    hostname = (parsed.hostname or "").lower().rstrip(".")
-    normalized_allowed_hosts = {host.lower().rstrip(".") for host in allowed_hosts}
+    hostname = normalize_canvas_host(parsed.hostname or "")
+    normalized_allowed_hosts = {normalize_canvas_host(host) for host in allowed_hosts}
     host_allowed = hostname in normalized_allowed_hosts
     if not host_allowed and hostname.endswith(".instructure.com"):
         host_allowed = True
@@ -540,6 +541,27 @@ def get_download_job(job_id: str) -> Optional[DownloadJob]:
     return _download_jobs.get(job_id)
 
 
+def _student_id_from_metadata(metadata: dict[str, Any]) -> Optional[int]:
+    """Return one normalized Canvas student ID from submission metadata."""
+    value = metadata.get("student_id")
+    if value is None:
+        value = metadata.get("user_id")
+
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value
+    if isinstance(value, str):
+        candidate = value.strip()
+        if not candidate:
+            return None
+        try:
+            return int(candidate, 10)
+        except ValueError:
+            return None
+    return None
+
+
 async def run_download_job(
     job_id: str,
     manifest: dict[str, Any],
@@ -579,7 +601,7 @@ async def run_download_job(
             job.per_submission.append(
                 {
                     "submission_id": result.submission_id,
-                    "student_id": metadata.get("student_id") or metadata.get("user_id"),
+                    "student_id": _student_id_from_metadata(metadata),
                     "student_name": metadata.get("student_name"),
                     "filename": metadata.get("filename"),
                     "status": result.status,
