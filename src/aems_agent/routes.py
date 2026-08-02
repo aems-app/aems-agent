@@ -108,6 +108,14 @@ def set_agent_globals(config_dir: Path, auth_token: str) -> None:
 
 def _get_config() -> AgentConfig:
     """Load config or return an actionable, non-destructive API error."""
+    if _config_dir is None:
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "code": "agent_not_initialized",
+                "message": "The Desktop Agent configuration is not initialized.",
+            },
+        )
     try:
         return load_config(_config_dir)
     except ConfigLoadError as exc:

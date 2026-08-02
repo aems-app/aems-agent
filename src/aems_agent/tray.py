@@ -213,6 +213,11 @@ def _open_folder_picker(config_dir: Path) -> None:
             config.storage_path = str(Path(folder).resolve())
             save_config(config, config_dir)
             logger.info("Storage path set via tray: %s", folder)
+    except ConfigLoadError as exc:
+        logger.error(
+            "Storage folder was not changed because config.json is invalid: %s",
+            exc,
+        )
     except Exception as e:
         logger.error("Folder picker failed: %s", e)
 
