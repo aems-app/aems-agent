@@ -7,6 +7,7 @@ rotated page. The fix routes quads through fitz ``page.transformation_matrix``.
 These are RED against the pre-fix naive flip on the CropBox / rotation cases and
 GREEN with ``_pdf_quad_to_pymupdf``; the normal-page test pins the strict no-op.
 """
+
 from __future__ import annotations
 
 from typing import List, Tuple
