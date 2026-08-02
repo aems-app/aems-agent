@@ -152,6 +152,47 @@ def test_run_uses_main_thread_tray_helper_on_darwin(
     assert "threaded_tray" not in called
 
 
+def test_run_starts_recovery_app_without_rewriting_invalid_config(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The executable must still start when strict config loading fails."""
+    config_file = tmp_path / "config.json"
+    invalid_config = b"{not valid json"
+    config_file.write_bytes(invalid_config)
+    fake_app = SimpleNamespace(state=SimpleNamespace())
+    called: dict[str, object] = {}
+
+    monkeypatch.setattr(cli_module, "_setup_signal_handlers", lambda: None)
+    monkeypatch.setattr(cli_module, "get_config_dir", lambda: tmp_path)
+    monkeypatch.setattr(
+        cli_module,
+        "save_config",
+        lambda *_args, **_kwargs: pytest.fail("invalid config must not be overwritten"),
+    )
+    monkeypatch.setattr(cli_module, "_acquire_single_instance_lock", lambda _: True)
+    monkeypatch.setattr(cli_module, "ensure_auth_token", lambda _: "token")
+    monkeypatch.setattr(cli_module, "_preflight_port_or_die", lambda *_: None)
+    monkeypatch.setattr(cli_module, "find_spec", lambda _: object())
+    monkeypatch.setattr(
+        cli_module,
+        "_run_uvicorn_server",
+        lambda agent_app, host, port, sock=None: called.setdefault(
+            "server", (agent_app, host, port, sock)
+        ),
+    )
+    monkeypatch.setitem(
+        sys.modules,
+        "aems_agent.app",
+        SimpleNamespace(create_app=lambda _: fake_app),
+    )
+
+    cli_module.run(port=61234, host="127.0.0.1", tray=False, launch_from_uri=None)
+
+    assert called["server"] == (fake_app, "127.0.0.1", 61234, None)
+    assert config_file.read_bytes() == invalid_config
+
+
 class TestPreflightPortCheck:
     """_preflight_port_or_die: free port passes; busy port dies informatively."""
 

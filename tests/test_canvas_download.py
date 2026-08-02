@@ -126,6 +126,24 @@ class TestValidateManifest:
             agent_key_id="test_key_id",
         )
 
+    def test_validate_manifest_reports_missing_https_hostname_structurally(self) -> None:
+        from aems_agent.canvas_download import ManifestValidationError, validate_manifest
+
+        manifest = _make_manifest(canvas_base_url="https://")
+
+        with pytest.raises(ManifestValidationError) as excinfo:
+            validate_manifest(
+                manifest,
+                allowed_hosts=["canvas.example.edu"],
+                agent_key_id="test_key_id",
+            )
+
+        assert excinfo.value.code == "canvas_host_invalid"
+        assert excinfo.value.as_detail() == {
+            "code": "canvas_host_invalid",
+            "message": "Canvas URL must include a valid hostname",
+        }
+
     def test_validate_manifest_http_rejected(self) -> None:
         from aems_agent.canvas_download import ManifestValidationError, validate_manifest
 

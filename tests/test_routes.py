@@ -301,6 +301,39 @@ class TestCanvasHostConfigEndpoints:
         assert config_file.read_bytes() == invalid_config
 
 
+class TestInvalidConfigStartupRecovery:
+    """A corrupt config must not prevent the local recovery API from starting."""
+
+    def test_create_app_starts_safely_without_rewriting_invalid_config(
+        self,
+        tmp_path: Path,
+    ) -> None:
+        _skip_if_no_fastapi()
+        from fastapi.testclient import TestClient
+
+        from aems_agent.app import create_app
+        from aems_agent.config import ensure_auth_token
+
+        config_dir = tmp_path / "invalid_startup_config"
+        config_dir.mkdir()
+        config_file = config_dir / "config.json"
+        invalid_config = b"{not valid json"
+        config_file.write_bytes(invalid_config)
+        token = ensure_auth_token(config_dir)
+
+        app = create_app(config_dir=config_dir)
+        client = TestClient(app, base_url="http://127.0.0.1:61234")
+
+        assert client.get("/status").status_code == 200
+        response = client.get(
+            "/config/canvas-hosts",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert response.status_code == 409
+        assert response.json()["detail"]["code"] == "agent_config_invalid"
+        assert config_file.read_bytes() == invalid_config
+
+
 class TestFileOperations:
     """Tests for file store/retrieve/delete endpoints."""
 
