@@ -339,6 +339,25 @@ class TestInvalidConfigStartupRecovery:
         assert health_response.json()["detail"]["code"] == "agent_config_invalid"
         assert config_file.read_bytes() == invalid_config
 
+    def test_config_access_fails_fast_when_app_globals_are_uninitialized(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        from fastapi import HTTPException
+
+        from aems_agent import routes
+
+        monkeypatch.setattr(routes, "_config_dir", None)
+
+        with pytest.raises(HTTPException) as excinfo:
+            routes._get_config()
+
+        assert excinfo.value.status_code == 503
+        assert excinfo.value.detail == {
+            "code": "agent_not_initialized",
+            "message": "The Desktop Agent configuration is not initialized.",
+        }
+
 
 class TestFileOperations:
     """Tests for file store/retrieve/delete endpoints."""

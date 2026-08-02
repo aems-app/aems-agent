@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 from types import SimpleNamespace
+import logging
 
 from aems_agent.config import AgentConfig, load_config, save_config
 
@@ -21,6 +22,30 @@ def test_tray_uses_safe_defaults_without_rewriting_invalid_config(tmp_path: Path
     config = tray._load_config_for_tray(config_dir)
 
     assert config == AgentConfig()
+    assert config_file.read_bytes() == invalid_config
+
+
+def test_folder_selection_explains_invalid_config_without_rewriting(
+    tmp_path: Path,
+    monkeypatch,
+    caplog,
+) -> None:
+    """Recovery mode must explain why a chosen folder was not persisted."""
+    from aems_agent import tray
+
+    config_dir = tmp_path / "invalid_folder_config"
+    config_dir.mkdir()
+    config_file = config_dir / "config.json"
+    invalid_config = b"{not valid json"
+    config_file.write_bytes(invalid_config)
+    selected = str((tmp_path / "Chosen Storage").resolve())
+    monkeypatch.setattr(tray.platform, "system", lambda: "Windows")
+    monkeypatch.setattr(tray, "_pick_folder_windows", lambda: selected)
+
+    with caplog.at_level(logging.ERROR, logger="aems_agent.tray"):
+        tray._open_folder_picker(config_dir)
+
+    assert "Storage folder was not changed because config.json is invalid" in caplog.text
     assert config_file.read_bytes() == invalid_config
 
 
