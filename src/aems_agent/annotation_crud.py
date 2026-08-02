@@ -130,7 +130,7 @@ def _page_quad_geometry_supported(page: Any) -> bool:
             return True
         cb = page.cropbox
         mb = page.mediabox
-        return abs(cb.x0 - mb.x0) <= 0.5 and abs(cb.y0 - mb.y0) <= 0.5
+        return bool(abs(cb.x0 - mb.x0) <= 0.5 and abs(cb.y0 - mb.y0) <= 0.5)
     except Exception:
         return True
 

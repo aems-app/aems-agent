@@ -7,6 +7,7 @@ import pytest
 
 from aems_agent.config import (
     AgentConfig,
+    ConfigLoadError,
     ensure_auth_token,
     get_auth_token,
     get_config_dir,
@@ -110,6 +111,25 @@ class TestAgentConfig:
         with pytest.raises(ValueError):
             AgentConfig(port=99999)
 
+    def test_canvas_hosts_are_normalized_and_deduplicated(self) -> None:
+        config = AgentConfig(
+            canvas_allowed_hosts=[
+                "Canvas.Example.EDU.",
+                "canvas.example.edu",
+                "2001:0db8:0000:0000:0000:0000:0000:0001",
+                "2001:db8::1",
+            ]
+        )
+        assert config.canvas_allowed_hosts == ["canvas.example.edu", "2001:db8::1"]
+
+    @pytest.mark.parametrize(
+        "host",
+        ["https://canvas.example.edu", "canvas.example.edu:443", "canvas.example.edu/path"],
+    )
+    def test_canvas_hosts_reject_urls_ports_and_paths(self, host: str) -> None:
+        with pytest.raises(ValueError, match="hostname only"):
+            AgentConfig(canvas_allowed_hosts=[host])
+
 
 class TestLoadSaveConfig:
     """Tests for load_config/save_config."""
@@ -138,13 +158,52 @@ class TestLoadSaveConfig:
         save_config(AgentConfig(), config_dir)
         assert (config_dir / "config.json").exists()
 
-    def test_load_corrupted_file(self, tmp_path: Path) -> None:
+    def test_load_corrupted_file_fails_loudly_without_rewrite(self, tmp_path: Path) -> None:
         config_dir = tmp_path / "cfg"
         config_dir.mkdir()
-        (config_dir / "config.json").write_text("not json", encoding="utf-8")
+        config_file = config_dir / "config.json"
+        original = b"not json"
+        config_file.write_bytes(original)
+
+        with pytest.raises(ConfigLoadError, match="invalid JSON"):
+            load_config(config_dir)
+        assert config_file.read_bytes() == original
+
+    def test_load_utf8_bom_preserves_existing_values(self, tmp_path: Path) -> None:
+        config_dir = tmp_path / "cfg"
+        config_dir.mkdir()
+        config_file = config_dir / "config.json"
+        config_file.write_bytes(
+            b'\xef\xbb\xbf{"storage_path": null, "port": 61235, '
+            b'"paired_origins": ["https://aems.example"]}'
+        )
 
         config = load_config(config_dir)
-        assert config.port == 61234  # Falls back to defaults
+
+        assert config.port == 61235
+        assert config.paired_origins == ["https://aems.example"]
+
+    def test_invalid_values_fail_loudly_without_rewrite(self, tmp_path: Path) -> None:
+        config_dir = tmp_path / "cfg"
+        config_dir.mkdir()
+        config_file = config_dir / "config.json"
+        original = b'{"port": 80, "paired_origins": ["https://aems.example"]}'
+        config_file.write_bytes(original)
+
+        with pytest.raises(ConfigLoadError, match="failed validation"):
+            load_config(config_dir)
+        assert config_file.read_bytes() == original
+
+    def test_non_object_json_fails_loudly_without_rewrite(self, tmp_path: Path) -> None:
+        config_dir = tmp_path / "cfg"
+        config_dir.mkdir()
+        config_file = config_dir / "config.json"
+        original = b"[]"
+        config_file.write_bytes(original)
+
+        with pytest.raises(ConfigLoadError, match="root must be an object"):
+            load_config(config_dir)
+        assert config_file.read_bytes() == original
 
 
 class TestAuthToken:

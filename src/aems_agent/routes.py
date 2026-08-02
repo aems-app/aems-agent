@@ -10,6 +10,8 @@ Endpoint summary:
     GET  /health                                        - Detailed health with disk info (auth)
     GET  /config/path                                   - Get storage path (auth)
     PUT  /config/path                                   - Set storage path (auth)
+    GET  /config/canvas-hosts                           - Get Canvas host allowlist (auth)
+    PUT  /config/canvas-hosts                           - Replace Canvas host allowlist (auth)
     GET  /files/{assignment_id}                         - List submissions (auth)
     GET  /files/{assignment_id}/{submission_id}          - Download PDF (auth)
     PUT  /files/{assignment_id}/{submission_id}          - Store PDF (auth)
@@ -62,7 +64,9 @@ from .config import (
     API_VERSION,
     MIN_CLIENT_API_VERSION,
     AgentConfig,
+    ConfigLoadError,
     load_config,
+    normalize_canvas_host,
     save_config,
 )
 from .security import RateLimiter, validate_path_within_storage
@@ -103,8 +107,30 @@ def set_agent_globals(config_dir: Path, auth_token: str) -> None:
 
 
 def _get_config() -> AgentConfig:
-    """Load the current agent config."""
-    return load_config(_config_dir)
+    """Load config or return an actionable, non-destructive API error."""
+    if _config_dir is None:
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "code": "agent_not_initialized",
+                "message": "The Desktop Agent configuration is not initialized.",
+            },
+        )
+    try:
+        return load_config(_config_dir)
+    except ConfigLoadError as exc:
+        logger.warning("Config-dependent API blocked by invalid config: %s", exc)
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "agent_config_invalid",
+                "message": (
+                    "The Desktop Agent config.json is invalid and was not changed. "
+                    "Repair or replace it, then retry."
+                ),
+                "reason": exc.reason,
+            },
+        ) from exc
 
 
 def _verify_token(authorization: Optional[str] = Header(default=None)) -> str:
@@ -291,6 +317,17 @@ class SetPathRequest(BaseModel):
         if not Path(v).is_absolute():
             raise ValueError("Path must be absolute")
         return v
+
+
+class CanvasAllowedHostsRequest(BaseModel):
+    """Request body for replacing self-hosted Canvas hostnames."""
+
+    hosts: List[str] = Field(default_factory=list)
+
+    @field_validator("hosts")
+    @classmethod
+    def validate_hosts(cls, values: List[str]) -> List[str]:
+        return list(dict.fromkeys(normalize_canvas_host(value) for value in values))
 
 
 class FileInfo(BaseModel):
@@ -824,6 +861,36 @@ async def set_path(
     save_config(config, _config_dir)
 
     return {"path": str(path), "message": "Storage path updated"}
+
+
+@router.get("/config/canvas-hosts")
+async def get_canvas_hosts(
+    _token: str = Depends(_verify_token),
+    _rl: None = Depends(_check_rate_limit),
+) -> Dict[str, Any]:
+    """Return explicit self-hosted Canvas hosts and the built-in SaaS rule."""
+    config = _get_config()
+    return {
+        "hosts": config.canvas_allowed_hosts,
+        "implicit_hosts": ["*.instructure.com"],
+    }
+
+
+@router.put("/config/canvas-hosts")
+async def set_canvas_hosts(
+    body: CanvasAllowedHostsRequest,
+    _token: str = Depends(_verify_token),
+    _rl: None = Depends(_check_rate_limit),
+) -> Dict[str, Any]:
+    """Replace the explicit self-hosted Canvas hostname allowlist."""
+    config = _get_config()
+    config.canvas_allowed_hosts = body.hosts
+    save_config(config, _config_dir)
+    return {
+        "hosts": config.canvas_allowed_hosts,
+        "implicit_hosts": ["*.instructure.com"],
+        "message": "Canvas host allowlist updated",
+    }
 
 
 @router.get("/files/{assignment_id}")
@@ -1701,7 +1768,7 @@ async def canvas_download_submissions(
         validate_manifest(manifest, allowed_hosts=allowed_hosts, agent_key_id=agent_key_id)
     except ManifestValidationError as e:
         logger.warning("Manifest validation failed: %s", e)
-        raise HTTPException(status_code=403, detail="Manifest validation failed")
+        raise HTTPException(status_code=403, detail=e.as_detail())
 
     # Create job and start background download
     if not config.storage_path:

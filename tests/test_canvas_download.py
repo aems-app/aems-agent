@@ -103,12 +103,46 @@ class TestValidateManifest:
         from aems_agent.canvas_download import ManifestValidationError, validate_manifest
 
         m = _make_manifest(canvas_base_url="https://evil.com")
-        with pytest.raises(ManifestValidationError, match="not in allowlist"):
+        with pytest.raises(ManifestValidationError, match="not allowed") as excinfo:
             validate_manifest(
                 m,
                 allowed_hosts=["university.instructure.com"],
                 agent_key_id="test_key_id",
             )
+        assert excinfo.value.code == "canvas_host_not_allowed"
+        assert excinfo.value.rejected_host == "evil.com"
+        assert excinfo.value.as_detail()["rejected_host"] == "evil.com"
+
+    def test_validate_manifest_matches_equivalent_ipv6_host_spellings(self) -> None:
+        from aems_agent.canvas_download import validate_manifest
+
+        manifest = _make_manifest(
+            canvas_base_url="https://[2001:0db8:0000:0000:0000:0000:0000:0001]"
+        )
+
+        assert validate_manifest(
+            manifest,
+            allowed_hosts=["2001:db8::1"],
+            agent_key_id="test_key_id",
+        )
+
+    def test_validate_manifest_reports_missing_https_hostname_structurally(self) -> None:
+        from aems_agent.canvas_download import ManifestValidationError, validate_manifest
+
+        manifest = _make_manifest(canvas_base_url="https://")
+
+        with pytest.raises(ManifestValidationError) as excinfo:
+            validate_manifest(
+                manifest,
+                allowed_hosts=["canvas.example.edu"],
+                agent_key_id="test_key_id",
+            )
+
+        assert excinfo.value.code == "canvas_host_invalid"
+        assert excinfo.value.as_detail() == {
+            "code": "canvas_host_invalid",
+            "message": "Canvas URL must include a valid hostname",
+        }
 
     def test_validate_manifest_http_rejected(self) -> None:
         from aems_agent.canvas_download import ManifestValidationError, validate_manifest
@@ -149,7 +183,7 @@ class TestValidateManifest:
         from aems_agent.canvas_download import ManifestValidationError, validate_manifest
 
         m = _make_manifest(canvas_base_url="https://custom-canvas.example.com")
-        with pytest.raises(ManifestValidationError, match="not in allowlist"):
+        with pytest.raises(ManifestValidationError, match="not allowed"):
             validate_manifest(
                 m,
                 allowed_hosts=[],
@@ -395,6 +429,24 @@ class TestDownloadSubmissions:
 class TestDownloadJob:
     """Tests for the in-memory job store and lifecycle."""
 
+    @pytest.mark.parametrize(
+        ("metadata", "expected"),
+        [
+            ({"student_id": 0, "user_id": 42}, 0),
+            ({"student_id": None, "user_id": "42"}, 42),
+            ({"student_id": "007"}, 7),
+            ({"student_id": {"unexpected": "shape"}}, None),
+        ],
+    )
+    def test_student_id_metadata_is_normalized(
+        self,
+        metadata: dict[str, Any],
+        expected: int | None,
+    ) -> None:
+        from aems_agent.canvas_download import _student_id_from_metadata
+
+        assert _student_id_from_metadata(metadata) == expected
+
     def test_create_download_job(self) -> None:
         from aems_agent.canvas_download import create_download_job, get_download_job
 
@@ -439,6 +491,43 @@ class TestDownloadJob:
         assert job.status == "completed"
         assert job.downloaded == 1
         assert len(job.per_submission) == 1
+
+    @pytest.mark.asyncio
+    async def test_run_download_job_preserves_student_identity_for_preview(
+        self, tmp_path: Path
+    ) -> None:
+        from aems_agent.canvas_download import (
+            create_download_job,
+            get_download_job,
+            run_download_job,
+        )
+
+        manifest = _make_manifest(
+            submissions=[
+                {
+                    "submission_id": 1001,
+                    "user_id": 42,
+                    "student_name": "Fixture Student",
+                    "filename": "answer.pdf",
+                    "file_id": 569,
+                    "download_url": "/files/569/download",
+                }
+            ]
+        )
+        job_id = create_download_job(manifest)
+
+        await run_download_job(
+            job_id=job_id,
+            manifest=manifest,
+            storage_path=tmp_path,
+            http_client=_stream_client(b"%PDF-1.4 fixture"),
+        )
+
+        job = get_download_job(job_id)
+        assert job is not None
+        assert job.per_submission[0]["student_id"] == 42
+        assert job.per_submission[0]["student_name"] == "Fixture Student"
+        assert job.per_submission[0]["filename"] == "answer.pdf"
 
     @pytest.mark.asyncio
     async def test_run_download_job_updates_progress_incrementally(self, tmp_path: Path) -> None:

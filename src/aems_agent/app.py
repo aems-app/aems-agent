@@ -27,7 +27,15 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.responses import Response as StarletteResponse
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
-from .config import AGENT_VERSION, API_VERSION, ensure_auth_token, get_config_dir, load_config
+from .config import (
+    AGENT_VERSION,
+    API_VERSION,
+    AgentConfig,
+    ConfigLoadError,
+    ensure_auth_token,
+    get_config_dir,
+    load_config,
+)
 from .crypto import ensure_keypair
 from .routes import router, set_agent_globals
 
@@ -162,9 +170,8 @@ def _setup_logging(config_dir: Path) -> None:
     root_logger.setLevel(logging.INFO)
 
 
-def _validate_storage(config_dir: Path) -> None:
+def _validate_storage(config: AgentConfig) -> None:
     """Validate that the storage path exists and is writable (if configured)."""
-    config = load_config(config_dir)
     if not config.storage_path:
         logger.warning("Storage path not configured. Set it via CLI or Settings page.")
         return
@@ -206,12 +213,15 @@ def _allowed_host_headers(host: str, port: int) -> set[str]:
 
 def create_app(
     config_dir: Optional[Path] = None,
+    fallback_config: Optional[AgentConfig] = None,
 ) -> FastAPI:
     """
     Create and configure the FastAPI application.
 
     Args:
         config_dir: Override config directory (for testing).
+        fallback_config: Safe in-memory settings to use only when the persisted
+            config is invalid. The invalid file is never rewritten.
 
     Returns:
         Configured FastAPI app instance.
@@ -219,15 +229,26 @@ def create_app(
     if config_dir is None:
         config_dir = get_config_dir()
 
-    config = load_config(config_dir)
+    config_error: Optional[ConfigLoadError] = None
+    try:
+        config = load_config(config_dir)
+    except ConfigLoadError as exc:
+        config_error = exc
+        config = fallback_config or AgentConfig()
     auth_token = ensure_auth_token(config_dir)
     ensure_keypair(config_dir)
 
     # Set up file logging
     _setup_logging(config_dir)
 
+    if config_error is not None:
+        logger.error(
+            "Starting in restricted recovery mode because config.json is invalid: %s",
+            config_error,
+        )
+
     # Validate storage on startup
-    _validate_storage(config_dir)
+    _validate_storage(config)
 
     # Set module-level globals for route handlers
     set_agent_globals(config_dir, auth_token)
@@ -246,6 +267,7 @@ def create_app(
         description="Local filesystem access for AEMS exam PDFs",
         version=AGENT_VERSION,
     )
+    app.state.config_load_error = config_error.reason if config_error is not None else None
 
     # Global exception handler for structured JSON errors
     @app.exception_handler(Exception)

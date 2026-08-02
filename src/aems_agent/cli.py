@@ -83,6 +83,7 @@ _ensure_stdio_streams()
 from .config import (  # noqa: E402
     AGENT_VERSION,
     AgentConfig,
+    ConfigLoadError,
     ensure_auth_token,
     get_auth_token,
     get_config_dir,
@@ -156,14 +157,24 @@ def run(
     _setup_signal_handlers()
 
     config_dir = get_config_dir()
-    config = load_config(config_dir)
-
-    config_values = config.model_dump()
-    config_values["port"] = port
-    config_values["host"] = host
-
-    config = AgentConfig(**config_values)
-    save_config(config, config_dir)
+    fallback_config: Optional[AgentConfig] = None
+    try:
+        config = load_config(config_dir)
+    except ConfigLoadError as exc:
+        config = AgentConfig(port=port, host=host)
+        fallback_config = config
+        typer.echo(
+            "Warning: config.json is invalid. Starting in restricted recovery mode "
+            "without changing the file.",
+            err=True,
+        )
+        logger.error("Starting with safe defaults because config.json is invalid: %s", exc)
+    else:
+        config_values = config.model_dump()
+        config_values["port"] = port
+        config_values["host"] = host
+        config = AgentConfig(**config_values)
+        save_config(config, config_dir)
 
     ensure_auth_token(config_dir)
 
@@ -201,7 +212,10 @@ def run(
 
     from .app import create_app
 
-    agent_app = create_app(config_dir)
+    if fallback_config is None:
+        agent_app = create_app(config_dir)
+    else:
+        agent_app = create_app(config_dir, fallback_config=fallback_config)
 
     # pystray's Cocoa backend must own the main thread on macOS. Other
     # platforms keep uvicorn on the main thread and the tray in the
@@ -599,7 +613,14 @@ def set_path(
         raise typer.Exit(1)
 
     config_dir = get_config_dir()
-    config = load_config(config_dir)
+    try:
+        config = load_config(config_dir)
+    except ConfigLoadError:
+        typer.echo(
+            "Error: config.json is invalid and was not changed. Repair or replace it, then retry.",
+            err=True,
+        )
+        raise typer.Exit(1)
     config.storage_path = str(target.resolve())
     save_config(config, config_dir)
 

@@ -224,6 +224,141 @@ class TestConfigPathEndpoints:
         assert resp.status_code == 422  # Pydantic validation error
 
 
+class TestCanvasHostConfigEndpoints:
+    """Tests for the product-facing self-hosted Canvas allowlist."""
+
+    def test_get_canvas_hosts(self, agent_client: Any, auth_headers: dict) -> None:
+        resp = agent_client.get("/config/canvas-hosts", headers=auth_headers)
+        assert resp.status_code == 200
+        assert resp.json() == {"hosts": [], "implicit_hosts": ["*.instructure.com"]}
+
+    def test_set_canvas_hosts_persists_normalized_values(
+        self,
+        agent_client: Any,
+        auth_headers: dict,
+        agent_config_dir: Path,
+    ) -> None:
+        from aems_agent.config import load_config
+
+        resp = agent_client.put(
+            "/config/canvas-hosts",
+            json={"hosts": ["Canvas.Example.EDU.", "canvas.example.edu", "192.0.2.10"]},
+            headers=auth_headers,
+        )
+        assert resp.status_code == 200
+        assert resp.json()["hosts"] == ["canvas.example.edu", "192.0.2.10"]
+        assert load_config(agent_config_dir).canvas_allowed_hosts == [
+            "canvas.example.edu",
+            "192.0.2.10",
+        ]
+
+    def test_set_canvas_hosts_rejects_url_without_changing_config(
+        self,
+        agent_client: Any,
+        auth_headers: dict,
+        agent_config_dir: Path,
+    ) -> None:
+        from aems_agent.config import load_config
+
+        resp = agent_client.put(
+            "/config/canvas-hosts",
+            json={"hosts": ["https://canvas.example.edu"]},
+            headers=auth_headers,
+        )
+        assert resp.status_code == 422
+        assert load_config(agent_config_dir).canvas_allowed_hosts == []
+
+    @pytest.mark.parametrize("method", ["get", "put"])
+    def test_invalid_config_returns_structured_recovery_error_without_rewrite(
+        self,
+        agent_client: Any,
+        auth_headers: dict,
+        agent_config_dir: Path,
+        method: str,
+    ) -> None:
+        config_file = agent_config_dir / "config.json"
+        invalid_config = b"{not valid json"
+        config_file.write_bytes(invalid_config)
+
+        if method == "get":
+            response = agent_client.get("/config/canvas-hosts", headers=auth_headers)
+        else:
+            response = agent_client.put(
+                "/config/canvas-hosts",
+                json={"hosts": ["canvas.example.edu"]},
+                headers=auth_headers,
+            )
+
+        assert response.status_code == 409
+        assert response.json()["detail"] == {
+            "code": "agent_config_invalid",
+            "message": (
+                "The Desktop Agent config.json is invalid and was not changed. "
+                "Repair or replace it, then retry."
+            ),
+            "reason": "invalid JSON",
+        }
+        assert config_file.read_bytes() == invalid_config
+
+
+class TestInvalidConfigStartupRecovery:
+    """A corrupt config must not prevent the local recovery API from starting."""
+
+    def test_create_app_starts_safely_without_rewriting_invalid_config(
+        self,
+        tmp_path: Path,
+    ) -> None:
+        _skip_if_no_fastapi()
+        from fastapi.testclient import TestClient
+
+        from aems_agent.app import create_app
+        from aems_agent.config import ensure_auth_token
+
+        config_dir = tmp_path / "invalid_startup_config"
+        config_dir.mkdir()
+        config_file = config_dir / "config.json"
+        invalid_config = b"{not valid json"
+        config_file.write_bytes(invalid_config)
+        token = ensure_auth_token(config_dir)
+
+        app = create_app(config_dir=config_dir)
+        client = TestClient(app, base_url="http://127.0.0.1:61234")
+
+        assert client.get("/status").status_code == 200
+        response = client.get(
+            "/config/canvas-hosts",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert response.status_code == 409
+        assert response.json()["detail"]["code"] == "agent_config_invalid"
+        health_response = client.get(
+            "/health",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert health_response.status_code == 409
+        assert health_response.json()["detail"]["code"] == "agent_config_invalid"
+        assert config_file.read_bytes() == invalid_config
+
+    def test_config_access_fails_fast_when_app_globals_are_uninitialized(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        from fastapi import HTTPException
+
+        from aems_agent import routes
+
+        monkeypatch.setattr(routes, "_config_dir", None)
+
+        with pytest.raises(HTTPException) as excinfo:
+            routes._get_config()
+
+        assert excinfo.value.status_code == 503
+        assert excinfo.value.detail == {
+            "code": "agent_not_initialized",
+            "message": "The Desktop Agent configuration is not initialized.",
+        }
+
+
 class TestFileOperations:
     """Tests for file store/retrieve/delete endpoints."""
 
@@ -1790,7 +1925,7 @@ class TestCanvasDownloadRoutes:
             headers=auth_headers,
         )
         assert resp.status_code == 403
-        assert "manifest validation failed" in resp.json()["detail"].lower()
+        assert resp.json()["detail"]["code"] == "manifest_expired"
 
     def test_canvas_download_rejects_unapproved_custom_host(
         self, agent_client: Any, auth_headers: dict, agent_config_dir: Path
@@ -1829,7 +1964,10 @@ class TestCanvasDownloadRoutes:
             headers=auth_headers,
         )
         assert resp.status_code == 403
-        assert "manifest validation failed" in resp.json()["detail"].lower()
+        detail = resp.json()["detail"]
+        assert detail["code"] == "canvas_host_not_allowed"
+        assert detail["rejected_host"] == "canvas.example.edu"
+        assert "Local Agent settings" in detail["message"]
 
 
 # ---------------------------------------------------------------------------
