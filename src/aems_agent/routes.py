@@ -64,6 +64,7 @@ from .config import (
     API_VERSION,
     MIN_CLIENT_API_VERSION,
     AgentConfig,
+    ConfigLoadError,
     load_config,
     normalize_canvas_host,
     save_config,
@@ -108,6 +109,25 @@ def set_agent_globals(config_dir: Path, auth_token: str) -> None:
 def _get_config() -> AgentConfig:
     """Load the current agent config."""
     return load_config(_config_dir)
+
+
+def _get_config_for_recovery_api() -> AgentConfig:
+    """Load config or return an actionable, non-destructive API error."""
+    try:
+        return _get_config()
+    except ConfigLoadError as exc:
+        logger.warning("Recovery API blocked by invalid config: %s", exc)
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "agent_config_invalid",
+                "message": (
+                    "The Desktop Agent config.json is invalid and was not changed. "
+                    "Repair or replace it, then retry."
+                ),
+                "reason": exc.reason,
+            },
+        ) from exc
 
 
 def _verify_token(authorization: Optional[str] = Header(default=None)) -> str:
@@ -846,7 +866,7 @@ async def get_canvas_hosts(
     _rl: None = Depends(_check_rate_limit),
 ) -> Dict[str, Any]:
     """Return explicit self-hosted Canvas hosts and the built-in SaaS rule."""
-    config = _get_config()
+    config = _get_config_for_recovery_api()
     return {
         "hosts": config.canvas_allowed_hosts,
         "implicit_hosts": ["*.instructure.com"],
@@ -860,7 +880,7 @@ async def set_canvas_hosts(
     _rl: None = Depends(_check_rate_limit),
 ) -> Dict[str, Any]:
     """Replace the explicit self-hosted Canvas hostname allowlist."""
-    config = _get_config()
+    config = _get_config_for_recovery_api()
     config.canvas_allowed_hosts = body.hosts
     save_config(config, _config_dir)
     return {

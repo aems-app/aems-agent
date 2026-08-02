@@ -268,6 +268,38 @@ class TestCanvasHostConfigEndpoints:
         assert resp.status_code == 422
         assert load_config(agent_config_dir).canvas_allowed_hosts == []
 
+    @pytest.mark.parametrize("method", ["get", "put"])
+    def test_invalid_config_returns_structured_recovery_error_without_rewrite(
+        self,
+        agent_client: Any,
+        auth_headers: dict,
+        agent_config_dir: Path,
+        method: str,
+    ) -> None:
+        config_file = agent_config_dir / "config.json"
+        invalid_config = b"{not valid json"
+        config_file.write_bytes(invalid_config)
+
+        if method == "get":
+            response = agent_client.get("/config/canvas-hosts", headers=auth_headers)
+        else:
+            response = agent_client.put(
+                "/config/canvas-hosts",
+                json={"hosts": ["canvas.example.edu"]},
+                headers=auth_headers,
+            )
+
+        assert response.status_code == 409
+        assert response.json()["detail"] == {
+            "code": "agent_config_invalid",
+            "message": (
+                "The Desktop Agent config.json is invalid and was not changed. "
+                "Repair or replace it, then retry."
+            ),
+            "reason": "invalid JSON",
+        }
+        assert config_file.read_bytes() == invalid_config
+
 
 class TestFileOperations:
     """Tests for file store/retrieve/delete endpoints."""
