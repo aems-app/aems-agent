@@ -107,16 +107,11 @@ def set_agent_globals(config_dir: Path, auth_token: str) -> None:
 
 
 def _get_config() -> AgentConfig:
-    """Load the current agent config."""
-    return load_config(_config_dir)
-
-
-def _get_config_for_recovery_api() -> AgentConfig:
     """Load config or return an actionable, non-destructive API error."""
     try:
-        return _get_config()
+        return load_config(_config_dir)
     except ConfigLoadError as exc:
-        logger.warning("Recovery API blocked by invalid config: %s", exc)
+        logger.warning("Config-dependent API blocked by invalid config: %s", exc)
         raise HTTPException(
             status_code=409,
             detail={
@@ -866,7 +861,7 @@ async def get_canvas_hosts(
     _rl: None = Depends(_check_rate_limit),
 ) -> Dict[str, Any]:
     """Return explicit self-hosted Canvas hosts and the built-in SaaS rule."""
-    config = _get_config_for_recovery_api()
+    config = _get_config()
     return {
         "hosts": config.canvas_allowed_hosts,
         "implicit_hosts": ["*.instructure.com"],
@@ -880,7 +875,7 @@ async def set_canvas_hosts(
     _rl: None = Depends(_check_rate_limit),
 ) -> Dict[str, Any]:
     """Replace the explicit self-hosted Canvas hostname allowlist."""
-    config = _get_config_for_recovery_api()
+    config = _get_config()
     config.canvas_allowed_hosts = body.hosts
     save_config(config, _config_dir)
     return {

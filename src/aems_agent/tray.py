@@ -25,6 +25,7 @@ from pathlib import Path
 from typing import Any, Optional
 
 from .clipboard import copy_text_to_clipboard, windows_system32_dir
+from .config import AgentConfig, ConfigLoadError, get_auth_token, load_config, save_config
 from .icons import RUNTIME_ICON_SIZE, render_status_icon
 
 logger = logging.getLogger(__name__)
@@ -33,6 +34,18 @@ logger = logging.getLogger(__name__)
 def _create_icon_image(color: str = "green") -> Any:
     """Render the live tray icon at a native runtime size."""
     return render_status_icon(color, size=RUNTIME_ICON_SIZE)
+
+
+def _load_config_for_tray(config_dir: Path) -> AgentConfig:
+    """Use safe in-memory defaults for read-only tray behavior during recovery."""
+    try:
+        return load_config(config_dir)
+    except ConfigLoadError as exc:
+        logger.error(
+            "Tray is using safe defaults because config.json is invalid and was not changed: %s",
+            exc,
+        )
+        return AgentConfig()
 
 
 def _pick_folder_windows() -> Optional[str]:
@@ -196,8 +209,6 @@ def _open_folder_picker(config_dir: Path) -> None:
             folder = _pick_folder_tk()
 
         if folder:
-            from .config import load_config, save_config
-
             config = load_config(config_dir)
             config.storage_path = str(Path(folder).resolve())
             save_config(config, config_dir)
@@ -218,14 +229,12 @@ def create_tray(config_dir: Path) -> Any:
     """
     import pystray  # type: ignore
 
-    from .config import get_auth_token, load_config
-
-    config = load_config(config_dir)
+    config = _load_config_for_tray(config_dir)
     icon_color = "green" if config.storage_path else "yellow"
     image = _create_icon_image(icon_color)
 
     def on_open_settings(icon: Any, item: Any) -> None:
-        cfg = load_config(config_dir)
+        cfg = _load_config_for_tray(config_dir)
         # Prefer the AEMS instance the user has actually paired with: a hosted
         # https origin takes priority (api.aems.app is the canonical hosted
         # deployment), then any other paired origin, then any non-localhost
@@ -253,7 +262,7 @@ def create_tray(config_dir: Path) -> Any:
     def on_set_folder(icon: Any, item: Any) -> None:
         _open_folder_picker(config_dir)
         # Update icon color based on new config
-        cfg = load_config(config_dir)
+        cfg = _load_config_for_tray(config_dir)
         new_color = "green" if cfg.storage_path else "yellow"
         icon.icon = _create_icon_image(new_color)
 

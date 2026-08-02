@@ -613,7 +613,14 @@ def set_path(
         raise typer.Exit(1)
 
     config_dir = get_config_dir()
-    config = load_config(config_dir)
+    try:
+        config = load_config(config_dir)
+    except ConfigLoadError:
+        typer.echo(
+            "Error: config.json is invalid and was not changed. Repair or replace it, then retry.",
+            err=True,
+        )
+        raise typer.Exit(1)
     config.storage_path = str(target.resolve())
     save_config(config, config_dir)
 
