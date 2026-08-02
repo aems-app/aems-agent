@@ -331,6 +331,12 @@ class TestInvalidConfigStartupRecovery:
         )
         assert response.status_code == 409
         assert response.json()["detail"]["code"] == "agent_config_invalid"
+        health_response = client.get(
+            "/health",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert health_response.status_code == 409
+        assert health_response.json()["detail"]["code"] == "agent_config_invalid"
         assert config_file.read_bytes() == invalid_config
 
 

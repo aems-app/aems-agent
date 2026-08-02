@@ -8,6 +8,22 @@ from types import SimpleNamespace
 from aems_agent.config import AgentConfig, load_config, save_config
 
 
+def test_tray_uses_safe_defaults_without_rewriting_invalid_config(tmp_path: Path) -> None:
+    """Tray construction must remain available during config recovery."""
+    from aems_agent import tray
+
+    config_dir = tmp_path / "invalid_tray_config"
+    config_dir.mkdir()
+    config_file = config_dir / "config.json"
+    invalid_config = b"{not valid json"
+    config_file.write_bytes(invalid_config)
+
+    config = tray._load_config_for_tray(config_dir)
+
+    assert config == AgentConfig()
+    assert config_file.read_bytes() == invalid_config
+
+
 def test_pick_folder_windows_reads_selected_path_from_powershell(
     tmp_path: Path,
     monkeypatch,

@@ -41,6 +41,25 @@ def test_set_path_command(
     assert config.storage_path == str(storage.resolve())
 
 
+def test_set_path_reports_invalid_config_without_rewriting_it(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(cli_module, "get_config_dir", lambda: tmp_path)
+    config_file = tmp_path / "config.json"
+    invalid_config = b"{not valid json"
+    config_file.write_bytes(invalid_config)
+    storage = tmp_path / "exam_storage"
+    storage.mkdir()
+
+    result = CliRunner().invoke(cli_module.app, ["set-path", str(storage)])
+
+    assert result.exit_code == 1
+    assert "config.json is invalid" in result.output
+    assert "was not changed" in result.output
+    assert config_file.read_bytes() == invalid_config
+
+
 def test_config_dir_command(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
