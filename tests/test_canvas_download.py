@@ -398,6 +398,24 @@ class TestDownloadSubmissions:
 class TestDownloadJob:
     """Tests for the in-memory job store and lifecycle."""
 
+    @pytest.mark.parametrize(
+        ("metadata", "expected"),
+        [
+            ({"student_id": 0, "user_id": 42}, 0),
+            ({"student_id": None, "user_id": "42"}, 42),
+            ({"student_id": "007"}, 7),
+            ({"student_id": {"unexpected": "shape"}}, None),
+        ],
+    )
+    def test_student_id_metadata_is_normalized(
+        self,
+        metadata: dict[str, Any],
+        expected: int | None,
+    ) -> None:
+        from aems_agent.canvas_download import _student_id_from_metadata
+
+        assert _student_id_from_metadata(metadata) == expected
+
     def test_create_download_job(self) -> None:
         from aems_agent.canvas_download import create_download_job, get_download_job
 

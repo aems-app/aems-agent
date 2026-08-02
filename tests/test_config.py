@@ -116,6 +116,7 @@ class TestAgentConfig:
             canvas_allowed_hosts=[
                 "Canvas.Example.EDU.",
                 "canvas.example.edu",
+                "2001:0db8:0000:0000:0000:0000:0000:0001",
                 "2001:db8::1",
             ]
         )
