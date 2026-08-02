@@ -205,10 +205,26 @@ async def _stream_download_capped(
     return b"".join(chunks), False
 
 
-class ManifestValidationError(Exception):
-    """Raised when a download manifest fails validation."""
+class ManifestValidationError(ValueError):
+    """Raised with a safe machine-readable reason for an invalid manifest."""
 
-    pass
+    def __init__(
+        self,
+        message: str,
+        *,
+        code: str,
+        rejected_host: Optional[str] = None,
+    ) -> None:
+        self.code = code
+        self.rejected_host = rejected_host
+        super().__init__(message)
+
+    def as_detail(self) -> dict[str, str]:
+        """Return the safe subset suitable for an HTTP error response."""
+        detail = {"code": self.code, "message": str(self)}
+        if self.rejected_host:
+            detail["rejected_host"] = self.rejected_host
+        return detail
 
 
 def validate_manifest(
@@ -239,34 +255,47 @@ def validate_manifest(
     # Check expiry
     expires_at = manifest.get("expires_at", 0)
     if time.time() > expires_at:
-        raise ManifestValidationError("Manifest expired")
+        raise ManifestValidationError("Manifest expired", code="manifest_expired")
 
     manifest_version = manifest.get("manifest_version")
     if manifest_version != SUPPORTED_MANIFEST_VERSION:
-        raise ManifestValidationError(f"Unsupported manifest version: {manifest_version!r}")
+        raise ManifestValidationError(
+            f"Unsupported manifest version: {manifest_version!r}",
+            code="unsupported_manifest_version",
+        )
 
     # Check HTTPS
     url = manifest.get("canvas_base_url", "")
     parsed = urlparse(url)
     if parsed.scheme != "https":
-        raise ManifestValidationError("HTTPS required for Canvas URL")
+        raise ManifestValidationError("HTTPS required for Canvas URL", code="canvas_https_required")
 
     # Check hostname allowlist (with *.instructure.com wildcard)
-    hostname = parsed.hostname or ""
-    host_allowed = hostname in allowed_hosts
+    hostname = (parsed.hostname or "").lower().rstrip(".")
+    normalized_allowed_hosts = {host.lower().rstrip(".") for host in allowed_hosts}
+    host_allowed = hostname in normalized_allowed_hosts
     if not host_allowed and hostname.endswith(".instructure.com"):
         host_allowed = True
     if not host_allowed:
-        raise ManifestValidationError(f"Host {hostname!r} not in allowlist: {allowed_hosts}")
+        raise ManifestValidationError(
+            f"Canvas host {hostname!r} is not allowed. Add it in Local Agent settings and retry.",
+            code="canvas_host_not_allowed",
+            rejected_host=hostname or None,
+        )
 
     # Check audience binding
     if manifest.get("audience_key_id") != agent_key_id:
-        raise ManifestValidationError("Manifest audience does not match agent key ID")
+        raise ManifestValidationError(
+            "Manifest audience does not match agent key ID",
+            code="manifest_audience_mismatch",
+        )
 
     # Check submissions present
     submissions = manifest.get("submissions", [])
     if not submissions:
-        raise ManifestValidationError("Manifest contains no submissions")
+        raise ManifestValidationError(
+            "Manifest contains no submissions", code="manifest_has_no_submissions"
+        )
 
     return True
 
@@ -535,11 +564,24 @@ async def run_download_job(
     job.status = "running"
 
     try:
+        submission_metadata: dict[int, dict[str, Any]] = {}
+        for submission in manifest.get("submissions", []):
+            if not isinstance(submission, dict):
+                continue
+            try:
+                submission_id = int(submission["submission_id"])
+            except (KeyError, TypeError, ValueError):
+                continue
+            submission_metadata[submission_id] = submission
 
         def record_result(result: SubmissionResult) -> None:
+            metadata = submission_metadata.get(result.submission_id, {})
             job.per_submission.append(
                 {
                     "submission_id": result.submission_id,
+                    "student_id": metadata.get("student_id") or metadata.get("user_id"),
+                    "student_name": metadata.get("student_name"),
+                    "filename": metadata.get("filename"),
                     "status": result.status,
                     "sha256": result.sha256,
                     "error": result.error,

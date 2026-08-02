@@ -224,6 +224,51 @@ class TestConfigPathEndpoints:
         assert resp.status_code == 422  # Pydantic validation error
 
 
+class TestCanvasHostConfigEndpoints:
+    """Tests for the product-facing self-hosted Canvas allowlist."""
+
+    def test_get_canvas_hosts(self, agent_client: Any, auth_headers: dict) -> None:
+        resp = agent_client.get("/config/canvas-hosts", headers=auth_headers)
+        assert resp.status_code == 200
+        assert resp.json() == {"hosts": [], "implicit_hosts": ["*.instructure.com"]}
+
+    def test_set_canvas_hosts_persists_normalized_values(
+        self,
+        agent_client: Any,
+        auth_headers: dict,
+        agent_config_dir: Path,
+    ) -> None:
+        from aems_agent.config import load_config
+
+        resp = agent_client.put(
+            "/config/canvas-hosts",
+            json={"hosts": ["Canvas.Example.EDU.", "canvas.example.edu", "192.0.2.10"]},
+            headers=auth_headers,
+        )
+        assert resp.status_code == 200
+        assert resp.json()["hosts"] == ["canvas.example.edu", "192.0.2.10"]
+        assert load_config(agent_config_dir).canvas_allowed_hosts == [
+            "canvas.example.edu",
+            "192.0.2.10",
+        ]
+
+    def test_set_canvas_hosts_rejects_url_without_changing_config(
+        self,
+        agent_client: Any,
+        auth_headers: dict,
+        agent_config_dir: Path,
+    ) -> None:
+        from aems_agent.config import load_config
+
+        resp = agent_client.put(
+            "/config/canvas-hosts",
+            json={"hosts": ["https://canvas.example.edu"]},
+            headers=auth_headers,
+        )
+        assert resp.status_code == 422
+        assert load_config(agent_config_dir).canvas_allowed_hosts == []
+
+
 class TestFileOperations:
     """Tests for file store/retrieve/delete endpoints."""
 
@@ -1790,7 +1835,7 @@ class TestCanvasDownloadRoutes:
             headers=auth_headers,
         )
         assert resp.status_code == 403
-        assert "manifest validation failed" in resp.json()["detail"].lower()
+        assert resp.json()["detail"]["code"] == "manifest_expired"
 
     def test_canvas_download_rejects_unapproved_custom_host(
         self, agent_client: Any, auth_headers: dict, agent_config_dir: Path
@@ -1829,7 +1874,10 @@ class TestCanvasDownloadRoutes:
             headers=auth_headers,
         )
         assert resp.status_code == 403
-        assert "manifest validation failed" in resp.json()["detail"].lower()
+        detail = resp.json()["detail"]
+        assert detail["code"] == "canvas_host_not_allowed"
+        assert detail["rejected_host"] == "canvas.example.edu"
+        assert "Local Agent settings" in detail["message"]
 
 
 # ---------------------------------------------------------------------------

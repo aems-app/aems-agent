@@ -103,12 +103,15 @@ class TestValidateManifest:
         from aems_agent.canvas_download import ManifestValidationError, validate_manifest
 
         m = _make_manifest(canvas_base_url="https://evil.com")
-        with pytest.raises(ManifestValidationError, match="not in allowlist"):
+        with pytest.raises(ManifestValidationError, match="not allowed") as excinfo:
             validate_manifest(
                 m,
                 allowed_hosts=["university.instructure.com"],
                 agent_key_id="test_key_id",
             )
+        assert excinfo.value.code == "canvas_host_not_allowed"
+        assert excinfo.value.rejected_host == "evil.com"
+        assert excinfo.value.as_detail()["rejected_host"] == "evil.com"
 
     def test_validate_manifest_http_rejected(self) -> None:
         from aems_agent.canvas_download import ManifestValidationError, validate_manifest
@@ -149,7 +152,7 @@ class TestValidateManifest:
         from aems_agent.canvas_download import ManifestValidationError, validate_manifest
 
         m = _make_manifest(canvas_base_url="https://custom-canvas.example.com")
-        with pytest.raises(ManifestValidationError, match="not in allowlist"):
+        with pytest.raises(ManifestValidationError, match="not allowed"):
             validate_manifest(
                 m,
                 allowed_hosts=[],
@@ -439,6 +442,43 @@ class TestDownloadJob:
         assert job.status == "completed"
         assert job.downloaded == 1
         assert len(job.per_submission) == 1
+
+    @pytest.mark.asyncio
+    async def test_run_download_job_preserves_student_identity_for_preview(
+        self, tmp_path: Path
+    ) -> None:
+        from aems_agent.canvas_download import (
+            create_download_job,
+            get_download_job,
+            run_download_job,
+        )
+
+        manifest = _make_manifest(
+            submissions=[
+                {
+                    "submission_id": 1001,
+                    "user_id": 42,
+                    "student_name": "Fixture Student",
+                    "filename": "answer.pdf",
+                    "file_id": 569,
+                    "download_url": "/files/569/download",
+                }
+            ]
+        )
+        job_id = create_download_job(manifest)
+
+        await run_download_job(
+            job_id=job_id,
+            manifest=manifest,
+            storage_path=tmp_path,
+            http_client=_stream_client(b"%PDF-1.4 fixture"),
+        )
+
+        job = get_download_job(job_id)
+        assert job is not None
+        assert job.per_submission[0]["student_id"] == 42
+        assert job.per_submission[0]["student_name"] == "Fixture Student"
+        assert job.per_submission[0]["filename"] == "answer.pdf"
 
     @pytest.mark.asyncio
     async def test_run_download_job_updates_progress_incrementally(self, tmp_path: Path) -> None:

@@ -14,6 +14,7 @@ Stores:
 """
 
 import json
+import ipaddress
 import logging
 import os
 import platform
@@ -21,7 +22,7 @@ import secrets
 from pathlib import Path
 from typing import List, Optional
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, ValidationError, field_validator
 
 logger = logging.getLogger(__name__)
 
@@ -56,6 +57,44 @@ def _resolve_agent_version() -> str:
 AGENT_VERSION = _resolve_agent_version()
 API_VERSION = "1.0.0"
 MIN_CLIENT_API_VERSION = "1.0.0"
+
+
+class ConfigLoadError(RuntimeError):
+    """Raised when an existing config file cannot be loaded safely."""
+
+    def __init__(self, path: Path, reason: str) -> None:
+        self.path = path
+        self.reason = reason
+        super().__init__(f"Cannot load agent config {path}: {reason}. The file was not changed.")
+
+
+def normalize_canvas_host(value: str) -> str:
+    """Return one canonical Canvas hostname or raise a validation error."""
+    host = value.strip().lower().rstrip(".")
+    if not host:
+        raise ValueError("Canvas host must not be empty")
+    try:
+        ipaddress.ip_address(host)
+        return host
+    except ValueError:
+        pass
+    if any(character in host for character in (":", "/", "\\", "?", "#", "@")):
+        raise ValueError("Canvas host must be a hostname only, without scheme, port, or path")
+    if len(host) > 253:
+        raise ValueError("Canvas hostname is too long")
+    labels = host.split(".")
+    if any(
+        not label
+        or len(label) > 63
+        or label.startswith("-")
+        or label.endswith("-")
+        or not all(
+            character.isascii() and (character.isalnum() or character == "-") for character in label
+        )
+        for label in labels
+    ):
+        raise ValueError("Canvas host is not a valid hostname or IP address")
+    return host
 
 
 def get_config_dir() -> Path:
@@ -130,6 +169,12 @@ class AgentConfig(BaseModel):
                 raise ValueError(f"Storage path must be absolute: {v}")
         return v
 
+    @field_validator("canvas_allowed_hosts")
+    @classmethod
+    def validate_canvas_allowed_hosts(cls, values: List[str]) -> List[str]:
+        """Normalize and de-duplicate configured self-hosted Canvas domains."""
+        return list(dict.fromkeys(normalize_canvas_host(value) for value in values))
+
 
 def _write_owner_only_text(path: Path, content: str) -> None:
     """Write *content* to *path*, created owner-only (0600) from the start.
@@ -171,14 +216,23 @@ def load_config(config_dir: Optional[Path] = None) -> AgentConfig:
         config_dir = get_config_dir()
 
     config_file = config_dir / "config.json"
-    if config_file.exists():
-        try:
-            data = json.loads(config_file.read_text(encoding="utf-8"))
-            return AgentConfig(**data)
-        except Exception as e:
-            logger.warning("Failed to load config from %s: %s", config_file, e)
+    if not config_file.exists():
+        return AgentConfig()
 
-    return AgentConfig()
+    try:
+        raw = config_file.read_text(encoding="utf-8-sig")
+    except (OSError, UnicodeError) as exc:
+        raise ConfigLoadError(config_file, "file could not be read as UTF-8") from exc
+    try:
+        data = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise ConfigLoadError(config_file, "invalid JSON") from exc
+    if not isinstance(data, dict):
+        raise ConfigLoadError(config_file, "JSON root must be an object")
+    try:
+        return AgentConfig(**data)
+    except (ValidationError, TypeError, ValueError) as exc:
+        raise ConfigLoadError(config_file, "configuration values failed validation") from exc
 
 
 def save_config(config: AgentConfig, config_dir: Optional[Path] = None) -> None:
