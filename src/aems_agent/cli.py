@@ -136,7 +136,9 @@ def _setup_signal_handlers() -> None:
 def run(
     port: int = typer.Option(61234, "--port", "-p", help="Port to listen on"),
     host: str = typer.Option("127.0.0.1", "--host", "-h", help="Host to bind to"),
-    tray: bool = typer.Option(False, "--tray", help="Show system tray icon"),
+    tray: bool = typer.Option(
+        True, "--tray/--no-tray", help="Show system tray icon (disable for headless service use)"
+    ),
     launch_from_uri: Optional[str] = typer.Option(
         None,
         "--launch-from-uri",
