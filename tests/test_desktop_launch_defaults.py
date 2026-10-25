@@ -15,10 +15,14 @@ from aems_agent import cli
 from aems_agent.config import AgentConfig
 
 
-@pytest.mark.parametrize("arguments,expected_tray", [([], True), (["--tray"], True), (["--no-tray"], False)])
+@pytest.mark.parametrize(
+    "arguments,expected_tray", [([], True), (["--tray"], True), (["--no-tray"], False)]
+)
 def test_run_defaults_to_tray_with_explicit_headless_opt_out(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
-    arguments: list[str], expected_tray: bool,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    arguments: list[str],
+    expected_tray: bool,
 ) -> None:
     """Exercise the actual Typer parser; direct calls bypass option defaults."""
     calls: list[str] = []
@@ -33,7 +37,9 @@ def test_run_defaults_to_tray_with_explicit_headless_opt_out(
     monkeypatch.setattr(cli, "_tray_requires_main_thread", lambda: False)
     monkeypatch.setattr(cli, "_start_tray", lambda *_: calls.append("tray"))
     monkeypatch.setattr(cli, "_run_uvicorn_server", lambda *_, **__: calls.append("server"))
-    monkeypatch.setitem(sys.modules, "aems_agent.app", SimpleNamespace(create_app=lambda _: agent_app))
+    monkeypatch.setitem(
+        sys.modules, "aems_agent.app", SimpleNamespace(create_app=lambda _: agent_app)
+    )
 
     result = CliRunner().invoke(cli.app, ["run", *arguments])
 
@@ -53,8 +59,11 @@ def test_run_defaults_to_tray_with_explicit_headless_opt_out(
     ],
 )
 def test_packaged_entrypoint_handles_windows_double_click(
-    monkeypatch: pytest.MonkeyPatch, system: str, frozen: bool,
-    arguments: list[str], expected: list[str],
+    monkeypatch: pytest.MonkeyPatch,
+    system: str,
+    frozen: bool,
+    arguments: list[str],
+    expected: list[str],
 ) -> None:
     """Run the entrypoint body, including its call to main, without a server."""
     import platform
@@ -69,7 +78,9 @@ def test_packaged_entrypoint_handles_windows_double_click(
     assert captured == [expected]
 
 
-def test_tray_worker_stays_alive_until_stopped(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_tray_worker_stays_alive_until_stopped(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """The Windows worker must retain the blocking icon loop; no fixed sleeps."""
     import threading
     from aems_agent import tray
