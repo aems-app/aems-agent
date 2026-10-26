@@ -39,6 +39,11 @@ def _is_frozen_macos_finder_launch() -> bool:
     return getattr(sys, "frozen", False) and platform.system() == "Darwin" and len(sys.argv) <= 1
 
 
+def _is_frozen_windows_desktop_launch() -> bool:
+    """Start the tray when Explorer launches the windowed executable bare."""
+    return getattr(sys, "frozen", False) and platform.system() == "Windows" and len(sys.argv) <= 1
+
+
 def _macos_launch_uri_arg() -> str | None:
     """Return the ``aems-agent://`` URI if the frozen app was launched via the
     custom URL scheme with the URI placed in ``argv``.
@@ -61,8 +66,12 @@ def _macos_launch_uri_arg() -> str | None:
 
 
 if __name__ == "__main__":
-    if _is_frozen_macos_finder_launch() or _macos_launch_uri_arg() is not None:
-        # Default a no-arg macOS Finder launch -- or an aems-agent:// custom
+    if (
+        _is_frozen_macos_finder_launch()
+        or _is_frozen_windows_desktop_launch()
+        or _macos_launch_uri_arg() is not None
+    ):
+        # Default a no-arg desktop launch -- or an aems-agent:// custom
         # scheme launch -- into `run --tray` so the bundle boots the menu-bar
         # agent. This mirrors what ``com.aems.agent.plist`` LaunchAgent does
         # at login. Rebuild argv from scratch so any URL argument is dropped

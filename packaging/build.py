@@ -425,7 +425,7 @@ After=network.target
 
 [Service]
 Type=simple
-ExecStart=%h/.local/bin/aems-agent run
+ExecStart=%h/.local/bin/aems-agent run --no-tray
 Restart=on-failure
 RestartSec=5
 
