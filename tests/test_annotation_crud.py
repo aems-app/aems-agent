@@ -16,6 +16,31 @@ from aems_pdf_annotator import (
 )
 
 
+@pytest.mark.parametrize(
+    "stable_id,xref,expected",
+    [
+        ("native-id", 42, "xref:42|id:native-id"),
+        ("native-id", None, "native-id"),
+        ("123", None, "id:123"),
+        (None, 42, "xref:42"),
+        (None, None, None),
+        ("", None, None),
+        ("unsafe|id:other", 42, "xref:42"),
+        ("unsafe|id:other", None, None),
+        ("unsafe\nidentity", 42, "xref:42"),
+        ("unsafe\x00identity", None, None),
+        ("unsafe\x7fidentity", 42, "xref:42"),
+        ("Note:123", 42, "xref:42|id:Note:123"),
+    ],
+)
+def test_scoped_identifier_preserves_safe_identity_and_rejects_delimiters(
+    stable_id: str | None, xref: int | None, expected: str | None,
+) -> None:
+    from aems_agent.annotation_crud import _scoped_identifier
+
+    assert _scoped_identifier(stable_id, xref) == expected
+
+
 def _pdf_rect_to_top_left(rect: List[float], page_height: float = 792.0) -> List[float]:
     """Convert browser request rects to the UI response coordinate space."""
     return [rect[0], page_height - rect[3], rect[2], page_height - rect[1]]
@@ -411,12 +436,14 @@ class TestResolveAnnotationIdentifier:
         assert xref is None
         assert stable_id is None
 
-    def test_legacy_note_format(self) -> None:
+    def test_legacy_note_token_is_preserved_until_canonical_lookup(self) -> None:
         from aems_agent.annotation_crud import resolve_annotation_identifier
 
         xref, stable_id = resolve_annotation_identifier("Note:123")
         assert xref is None
-        assert stable_id == "123"
+        # An exact explicit Note:123 must win over the legacy numeric alias.
+        # Only the canonical finder can safely decide whether aliasing is needed.
+        assert stable_id == "Note:123"
 
     def test_annotation_type_name_filtered(self) -> None:
         """Annotation type names like 'Text' should not be used as stable_id."""
@@ -688,3 +715,43 @@ class TestHighlightQuadRoundTrip:
         assert len(got["quads"]) == 2  # per-line geometry preserved, not collapsed
         assert got["anchor_text"] == "the quick brown fox jumps"
         assert str(got.get("source")) == "HUMAN"
+
+@pytest.mark.parametrize("stable_id", ["legacy/id", "legacy id", "#hash", "legacy\u00e9"])
+@pytest.mark.parametrize("xref", [42, None])
+def test_implicit_native_id_outside_host_route_alphabet_uses_only_known_xref(
+    stable_id: str, xref: int | None,
+) -> None:
+    from aems_agent.annotation_crud import _scoped_identifier
+
+    expected = "xref:42" if xref is not None else None
+    assert _scoped_identifier(stable_id, xref) == expected, (
+        "unsafe implicit native ID leaked into the host annotation route"
+    )
+
+
+def test_annotation_selector_never_uses_author_title_as_canonical_identity() -> None:
+    from aems_agent.annotation_crud import select_annotation_entry
+
+    author_only = {"title": "requested-id", "xref": 42, "content": "UNCHANGED"}
+    assert select_annotation_entry([author_only], "requested-id", 42) is None
+    assert author_only == {"title": "requested-id", "xref": 42, "content": "UNCHANGED"}
+
+@pytest.mark.parametrize(
+    "entry,stable_id",
+    [
+        ({"stable_id": "id:foo", "xref": 42}, "id:foo"),
+        ({"stable_id": "xref:123", "xref": 42}, "xref:123"),
+        ({"id": "id:foo", "xref": 42}, "foo"),
+        ({"id": "xref:42|id:id:foo", "xref": 42}, "id:foo"),
+        ({"name": "id:foo", "xref": 42}, "id:foo"),
+        ({"name": "xref:123", "xref": 42}, "xref:123"),
+    ],
+)
+def test_annotation_selector_distinguishes_typed_native_ids_from_wire_envelopes(
+    entry: dict, stable_id: str,
+) -> None:
+    from aems_agent.annotation_crud import select_annotation_entry
+
+    before = dict(entry)
+    assert select_annotation_entry([entry], stable_id, 42) is entry
+    assert entry == before
