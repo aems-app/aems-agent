@@ -755,3 +755,13 @@ def test_annotation_selector_distinguishes_typed_native_ids_from_wire_envelopes(
     before = dict(entry)
     assert select_annotation_entry([entry], stable_id, 42) is entry
     assert entry == before
+
+@pytest.mark.parametrize("stable_id", ["shared-id", "id:foo", "xref:123"])
+def test_entry_selection_never_recovers_a_missing_scope_from_a_unique_id(
+    stable_id: str,
+) -> None:
+    from aems_agent.annotation_crud import select_annotation_entry
+
+    entry = {"stable_id": stable_id, "xref": 42, "has_explicit_stable_id": True}
+    assert select_annotation_entry([entry], stable_id, 99) is None
+    assert select_annotation_entry([entry], stable_id, 42) is entry
