@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 from urllib.parse import unquote
 
+from aems_pdf_annotator.geometry import pdf_rect_to_native
 from aems_pdf_annotator import (
     PDFAnnotator,
     PDFAnnotation,
@@ -224,17 +225,12 @@ def resolve_annotation_identifier(identifier: str) -> Tuple[Optional[int], Optio
         if stable_id:
             if _is_annotation_type_name(stable_id):
                 stable_id = None
-            elif xref is not None and str(xref) == str(stable_id):
-                stable_id = None
 
         return xref, stable_id
 
     # Handle "Note:1" format
     if ":" in identifier_str and not identifier_str.startswith(("xref:", "id:")):
-        parts = identifier_str.split(":", 1)
-        if len(parts) == 2:
-            stable_id = parts[1].strip()
-            return None, stable_id
+        return None, identifier_str
 
     # Try pure numeric as xref
     try:
@@ -283,7 +279,11 @@ def serialize_annotation_entry(
         if xref is not None:
             preferred_id = str(xref)
     serialized["stable_id"] = stable_id if stable_id else None
-    serialized["id"] = preferred_id
+    serialized["id"] = (
+        _scoped_identifier(stable_id, xref)
+        if serialized.get("has_explicit_stable_id") is False
+        else preferred_id
+    )
 
     # Source tracking
     source = serialized.get("source") or "AI"
@@ -298,25 +298,46 @@ def serialize_annotation_entry(
     return serialized
 
 
+def _scoped_identifier(stable_id: Optional[str], xref: Optional[int]) -> Optional[str]:
+    """Keep the object scope alongside its canonical identity."""
+    if stable_id and re.fullmatch(r"[A-Za-z0-9:_-]+", stable_id) is None:
+        stable_id = None
+    if xref is not None:
+        return f"xref:{xref}|id:{stable_id}" if stable_id else f"xref:{xref}"
+    if stable_id:
+        return (
+            f"id:{stable_id}"
+            if stable_id.isdigit() or stable_id.startswith(("id:", "xref:"))
+            else stable_id
+        )
+    return None
+
+
 def select_annotation_entry(
     annotations: List[Dict[str, Any]],
     stable_id: Optional[str],
     xref: Optional[int],
 ) -> Optional[Dict[str, Any]]:
-    """Locate an annotation within a serialized list by stable id or xref."""
-    for ann in annotations:
-        if stable_id:
-            ann_stable_id = ann.get("stable_id")
-            if ann_stable_id and str(ann_stable_id) == str(stable_id):
-                return ann
-            # Fallback
-            for key in ("id", "name", "title"):
-                candidate = ann.get(key)
-                if candidate and str(candidate) == str(stable_id):
-                    return ann
-        if xref is not None and ann.get("xref") == xref:
-            return ann
-    return None
+    """Select one canonical entry, requiring a supplied object scope to match."""
+
+    def identity(entry: Dict[str, Any]) -> Optional[str]:
+        raw = entry.get("stable_id")
+        if raw is not None:
+            return str(raw)
+        value = entry.get("id") or entry.get("name")
+        if value is None:
+            return None
+        token = str(value)
+        if entry.get("id") and token.startswith("id:"):
+            return token[3:]
+        return (
+            token.partition("|id:")[2] if token.startswith("xref:") and "|id:" in token else token
+        )
+
+    matches = [entry for entry in annotations if not stable_id or identity(entry) == stable_id]
+    if xref is not None:
+        matches = [entry for entry in matches if entry.get("xref") == xref]
+    return matches[0] if len(matches) == 1 else None
 
 
 # ---------------------------------------------------------------------------
@@ -539,7 +560,7 @@ def add_annotation(pdf_path: Path, payload: Dict[str, Any]) -> Dict[str, Any]:
                 raise RuntimeError("Failed to open PDF")
 
             page = annotator.doc[page_index]
-            page_rect = page.rect
+            page_rect = page.cropbox
             page_width = page_rect.width or 612.0
             page_height = page_rect.height or 792.0
 
@@ -550,7 +571,7 @@ def add_annotation(pdf_path: Path, payload: Dict[str, Any]) -> Dict[str, Any]:
             # Drawing points are converted internally by PDFAnnotator.
             bbox: Optional[BBox] = None
             if rect_values is not None:
-                pymupdf_rect = _pdf_rect_to_pymupdf(rect_values, page_height)
+                pymupdf_rect = pdf_rect_to_native(rect_values, page)
                 bbox = BBox.from_list(pymupdf_rect)
             else:
                 # Generate default rect in PyMuPDF coords
@@ -582,7 +603,12 @@ def add_annotation(pdf_path: Path, payload: Dict[str, Any]) -> Dict[str, Any]:
                 stroke_color_rgb=stroke_color_rgb,
             )
 
-            if not annotator.add_annotation(annotation):
+            rotation_options = (
+                {"textbox_rotation": page.rotation}
+                if annotation.kind == AnnotationType.TEXTBOX and page.rotation
+                else {}
+            )
+            if not annotator.add_annotation(annotation, **rotation_options):
                 raise RuntimeError("Failed to add annotation to PDF")
 
             annotator.save()
@@ -691,7 +717,7 @@ def update_annotation(
         )
 
     # Build the canonical identifier for the shared package
-    canonical_identifier = stable_id or (str(xref_value) if xref_value else annotation_id)
+    canonical_identifier = _scoped_identifier(stable_id, xref_value) or annotation_id
 
     lock = _get_pdf_lock(pdf_path)
     with lock:
@@ -702,15 +728,12 @@ def update_annotation(
 
             # Grader name fallback: payload > existing annotation author > "Teacher"
             if not grader_name:
-                existing = (
-                    annotator.find_annotation_by_id(canonical_identifier) if stable_id else None
-                )
-                if not existing and xref_value is not None:
-                    existing = annotator.find_annotation_by_xref(xref_value)
+                existing = annotator.find_annotation_by_id(canonical_identifier)
                 if existing:
                     page_idx_existing, _annot_obj = existing
+                    existing_xref = _annot_obj.xref
                     page_anns = annotator.get_annotations_on_page(page_idx_existing)
-                    found = select_annotation_entry(page_anns, stable_id=stable_id, xref=xref_value)
+                    found = select_annotation_entry(page_anns, stable_id=None, xref=existing_xref)
                     if found:
                         grader_name = found.get("grader_name") or None
                 if not grader_name:
@@ -723,16 +746,11 @@ def update_annotation(
             if new_rect is not None or new_quads is not None:
                 target_pg = new_page_index
                 if target_pg is None:
-                    found = (
-                        annotator.find_annotation_by_id(canonical_identifier) if stable_id else None
-                    )
-                    if not found and xref_value is not None:
-                        found = annotator.find_annotation_by_xref(xref_value)
+                    found = annotator.find_annotation_by_id(canonical_identifier)
                     target_pg = found[0] if found else 0
                 page_obj = annotator.doc[target_pg]
-                page_height = page_obj.rect.height or 792.0
                 if new_rect is not None:
-                    rect_tuple = tuple(_pdf_rect_to_pymupdf(list(new_rect), page_height))
+                    rect_tuple = tuple(pdf_rect_to_native(list(new_rect), page_obj))
                 if new_quads is not None:
                     # Text-anchored quads carry raw PDF user-space coordinates;
                     # reject on the one geometry the transform cannot place exactly
@@ -797,24 +815,15 @@ def update_annotation(
             # Re-read annotations to find the updated one
             updated_ann: Optional[Dict[str, Any]] = None
 
-            # Try to find via public methods
-            if stable_id:
-                result = annotator.find_annotation_by_id(stable_id)
-                if result:
-                    page_idx, _annot = result
-                    page_annotations = annotator.get_annotations_on_page(page_idx)
-                    updated_ann = select_annotation_entry(
-                        page_annotations, stable_id=stable_id, xref=xref_value
-                    )
-
-            if not updated_ann and xref_value is not None:
-                result = annotator.find_annotation_by_xref(xref_value)
-                if result:
-                    page_idx, _annot = result
-                    page_annotations = annotator.get_annotations_on_page(page_idx)
-                    updated_ann = select_annotation_entry(
-                        page_annotations, stable_id=stable_id, xref=xref_value
-                    )
+            result = annotator.find_annotation_by_id(_scoped_identifier(stable_id, xref_value))
+            if result:
+                page_idx, annotation = result
+                updated_xref = annotation.xref
+                updated_ann = select_annotation_entry(
+                    annotator.get_annotations_on_page(page_idx),
+                    stable_id=None,
+                    xref=updated_xref,
+                )
 
             serialized = serialize_annotation_entry(updated_ann)
 
@@ -829,7 +838,7 @@ def delete_annotation(pdf_path: Path, annotation_id: str) -> Dict[str, Any]:
     _validate_annotation_id(annotation_id)
     xref_value, stable_id = resolve_annotation_identifier(annotation_id)
 
-    canonical_identifier = stable_id or (str(xref_value) if xref_value else annotation_id)
+    canonical_identifier = _scoped_identifier(stable_id, xref_value) or annotation_id
 
     lock = _get_pdf_lock(pdf_path)
     with lock:
