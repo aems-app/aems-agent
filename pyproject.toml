@@ -42,7 +42,7 @@ dependencies = [
     # Pinned git tag (public repo): PyPI still carries only 0.2.0, which lacks
     # the highlight-quads round-trip this agent version requires. Repoint to
     # PyPI once 0.3.0 is published there.
-    "aems-pdf-annotator @ git+https://github.com/aems-app/aems-pdf-annotator.git@e92583f14493553e5d39d2225915b041ff94b2b5",
+    "aems-pdf-annotator @ git+https://github.com/aems-app/aems-pdf-annotator.git@bdc40103f71cbcd315272613bcb58bf1c23b88b7",
     "pymupdf>=1.25.0",
     # pystray is required for the tray notification that surfaces the
     # pairing PIN to the user.  Without it the agent falls back to

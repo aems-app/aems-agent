@@ -16,6 +16,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from urllib.parse import unquote
 
 from aems_pdf_annotator.geometry import pdf_rect_to_native
+from aems_pdf_annotator.core import textbox_content_error
 from aems_pdf_annotator import (
     PDFAnnotator,
     PDFAnnotation,
@@ -385,6 +386,9 @@ def _validate_content(content: Any) -> str:
     """Validate and return content string."""
     if not isinstance(content, str):
         raise ValueError("content must be a string")
+    content_error = textbox_content_error(content)
+    if content_error:
+        raise ValueError(content_error)
     if len(content) > MAX_COMMENT_LENGTH:
         raise ValueError(f"content exceeds maximum length of {MAX_COMMENT_LENGTH} characters")
     return content
